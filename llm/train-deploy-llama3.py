@@ -68,7 +68,7 @@ role = "arn:aws:iam::505049265445:role/service-role/AmazonSageMaker-ExecutionRol
 
 # In[ ]:
 
-training_input_path = f's3://{sm_session.default_bucket()}/datasets/writing_accuracy_dataset/train_dataset.json'
+training_input_path = f's3://{sm_session.default_bucket()}/datasets/writing_accuracy_dataset/train_dataset_writing_accuracy.json'
 # define a data input dictonary with our uploaded s3 uris
 data = {'training': training_input_path}
 
