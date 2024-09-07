@@ -98,6 +98,10 @@ def training_function(script_args, training_args):
     # Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(script_args.model_id, use_fast=True)
     tokenizer.pad_token = tokenizer.eos_token
+
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+
     # i am using instruct so no need to use a define chat template
     #tokenizer.chat_template = LLAMA_3_CHAT_TEMPLATE
 
@@ -109,7 +113,7 @@ def training_function(script_args, training_args):
 
     train_dataset = train_dataset.map(template_dataset, remove_columns=["messages"])
     test_dataset = test_dataset.map(template_dataset, remove_columns=["messages"])
-
+    
     # print random sample on rank 0
     if training_args.distributed_state.is_main_process:
         for index in random.sample(range(len(train_dataset)), 2):
@@ -147,13 +151,14 @@ def training_function(script_args, training_args):
 
     # LoRA config based on QLoRA paper & Sebastian Raschka experiment
     peft_config = LoraConfig(
-        lora_alpha=8,
+        lora_alpha=32,
         lora_dropout=0.05,
         r=16,
         bias="none",
-        target_modules="all-linear",
+        #target_modules="all-linear",
+        target_modules=['up_proj', 'down_proj', 'gate_proj', 'k_proj', 'q_proj', 'v_proj', 'o_proj'],
         task_type="CAUSAL_LM",
-        # modules_to_save = ["lm_head", "embed_tokens"] # add if you want to use the Llama 3 instruct template
+        #modules_to_save = ["lm_head", "embed_tokens"] # add if you want to use the Llama 3 instruct template
     )
 
     ################

@@ -26,7 +26,6 @@
 # * [PyTorch FSDP](https://pytorch.org/blog/introducing-pytorch-fully-sharded-data-parallel-api/) is a data/model parallelism technique that shards model across GPUs, reducing memory requirements and enabling the training of larger models more efficiently​​​​​​.
 # * Q-LoRA is a fine-tuning method that leverages quantization and Low-Rank Adapters to efficiently reduced computational requirements and memory footprint. 
 # 
-# This blog post walks you thorugh how to fine-tune open LLMs from Hugging Face using Amazon SageMaker. This blog is an extension and dedicated version to my [How to Fine-Tune LLMs in 2024 with Hugging Face](https://www.philschmid.de/fine-tune-llms-in-2024-with-trl) version, specifically tailored to run on Amazon SageMaker.
 # 
 # 
 # 
@@ -37,7 +36,7 @@
 # In[1]:
 
 
-#!pip install transformers "datasets[s3]==2.18.0" "sagemaker>=2.229.0" "huggingface_hub[cli]" --upgrade --quiet
+#!pip install transformers datasets "sagemaker>=2.229.0" "huggingface_hub[cli]" --upgrade --quiet
 
 
 # Next we need to login into Hugging Face to access the Llama 3 70b model and store our trained model on Hugging Face. If you don't have an account yet and accepted the terms, you can create one [here](https://huggingface.co/join). 
@@ -46,7 +45,7 @@
 # 
 # 
 
-# In[1]:
+# In[5]:
 
 
 # load data from s3 bucket
@@ -66,13 +65,16 @@ role = "arn:aws:iam::505049265445:role/service-role/AmazonSageMaker-ExecutionRol
 # 
 # After our environment is set up, we can start creating and preparing our dataset. A fine-tuning dataset should have a diverse set of demonstrations of the task you want to solve. If you want to learn more about how to create a dataset, take a look at the [How to Fine-Tune LLMs in 2024 with Hugging Face](https://www.philschmid.de/fine-tune-llms-in-2024-with-trl#3-create-and-prepare-the-dataset).
 
-# In[ ]:
+# In[7]:
+
 
 training_input_path = f's3://{sm_session.default_bucket()}/datasets/writing_accuracy_dataset/train_dataset_writing_accuracy.json'
 # define a data input dictonary with our uploaded s3 uris
 data = {'training': training_input_path}
+data
 
-# In[3]:
+
+# In[8]:
 
 
 from datasets import load_dataset, DatasetDict
@@ -80,8 +82,10 @@ raw_dataset = load_dataset(
         "json",
         data_files=data
     )
+raw_dataset
 
-# In[4]:
+
+# In[9]:
 
 
 indices_1 = range(0,7000)
@@ -91,12 +95,18 @@ dataset_dict = {
     "test": raw_dataset["training"].select(indices_2)
 }
 dataset = DatasetDict(dataset_dict)
-print(dataset)
+dataset
+
+
+# In[12]:
+
+
+dataset["train"][14]
 
 
 # After we processed the datasets we are going to use the [FileSystem integration](https://huggingface.co/docs/datasets/filesystems) to upload our dataset to S3. We are using the `sess.default_bucket()`, adjust this if you want to store the dataset in a different S3 bucket. We will use the S3 path later in our training script.
 
-# In[5]:
+# In[13]:
 
 
 # save train_dataset to s3 using our SageMaker session
@@ -125,8 +135,8 @@ print(f"https://s3.console.aws.amazon.com/s3/buckets/{sm_session.default_bucket(
 # 
 # For configuration we use the new `TrlParser`, that allows us to provide hyperparameters in a yaml file. This `yaml` will be uploaded and provided to Amazon SageMaker similar to our datasets. Below is the config file for fine-tuning Llama 3 70B on 8x A100 GPUs or 4x24GB GPUs. We are saving the config file as `fsdp_qlora_llama3_70b.yaml` and upload it to S3.
 
-# In[14]:
 
+# In[25]:
 
 from sagemaker.s3 import S3Uploader
 
@@ -150,7 +160,7 @@ print(train_config_s3_path)
 # 
 # The `HuggingFace` configuration below will start a training job on 1x `p4d.24xlarge` using 8x A100 GPUs. The amazing part about SageMaker is that you can easily scale up to 2x `p4d.24xlarge` by modifying the `instance_count`. SageMaker will take care of the rest for you. 
 
-# In[16]:
+# In[21]:
 
 
 from sagemaker.huggingface import HuggingFace
@@ -190,7 +200,7 @@ huggingface_estimator = HuggingFace(
 # 
 # We can now start our training job, with the `.fit()` method passing our S3 path to the training script.
 
-# In[17]:
+# In[22]:
 
 
 # define a data input dictonary with our uploaded s3 uris
@@ -202,6 +212,3 @@ data = {
 
 # starting the train job with our uploaded datasets as input
 huggingface_estimator.fit(data, wait=True)
-
-
-# In our example the training Llama 3 70B with Flash Attention for 2 epochs with a dataset of 10k samples takes 5052 seconds (~84minutes) on a `ml.p4d.24xlarge` or ~$50.
