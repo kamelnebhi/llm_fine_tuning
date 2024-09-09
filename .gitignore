@@ -1,2 +1,4 @@
 slm/nohup.out
 slm/wandb/*
+llm/wandb/*
+llm/nohup.out

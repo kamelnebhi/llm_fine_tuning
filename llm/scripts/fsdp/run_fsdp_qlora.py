@@ -18,9 +18,10 @@ from peft import LoraConfig
 from trl import SFTTrainer
 
 # Comment in if you want to use the Llama 3 instruct template but make sure to add modules_to_save
-# LLAMA_3_CHAT_TEMPLATE="{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' %}{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}{{ content }}{% endfor %}{% if add_generation_prompt %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}{% endif %}"
+LLAMA_3_CHAT_TEMPLATE="{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' %}{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}{{ content }}{% endfor %}{% if add_generation_prompt %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}{% endif %}"
 
 # Anthropic/Vicuna like template without the need for special tokens
+'''
 LLAMA_3_CHAT_TEMPLATE = (
     "{% for message in messages %}"
     "{% if message['role'] == 'system' %}"
@@ -35,7 +36,7 @@ LLAMA_3_CHAT_TEMPLATE = (
     "{{ '\n\nAssistant: ' }}"
     "{% endif %}"
 )
-
+'''
 
 # ACCELERATE_USE_FSDP=1 FSDP_CPU_RAM_EFFICIENT_LOADING=1 torchrun --nproc_per_node=4 ./scripts/run_fsdp_qlora.py --config llama_3_70b_fsdp_qlora.yaml
 
@@ -103,7 +104,7 @@ def training_function(script_args, training_args):
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
     # i am using instruct so no need to use a define chat template
-    #tokenizer.chat_template = LLAMA_3_CHAT_TEMPLATE
+    tokenizer.chat_template = LLAMA_3_CHAT_TEMPLATE
 
     # template dataset
     def template_dataset(examples):
@@ -158,7 +159,7 @@ def training_function(script_args, training_args):
         #target_modules="all-linear",
         target_modules=['up_proj', 'down_proj', 'gate_proj', 'k_proj', 'q_proj', 'v_proj', 'o_proj'],
         task_type="CAUSAL_LM",
-        #modules_to_save = ["lm_head", "embed_tokens"] # add if you want to use the Llama 3 instruct template
+        modules_to_save = ["lm_head", "embed_tokens"] # add if you want to use the Llama 3 instruct template
     )
 
     ################

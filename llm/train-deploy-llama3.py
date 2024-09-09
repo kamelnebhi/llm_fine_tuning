@@ -46,6 +46,10 @@
 # 
 
 # In[5]:
+import wandb
+
+# Initialize a W&B run
+wandb.init(project='llama3_writing_acc_sft', entity='knebhi')
 
 
 # load data from s3 bucket
@@ -68,7 +72,7 @@ role = "arn:aws:iam::505049265445:role/service-role/AmazonSageMaker-ExecutionRol
 # In[7]:
 
 
-training_input_path = f's3://{sm_session.default_bucket()}/datasets/writing_accuracy_dataset/train_dataset_writing_accuracy.json'
+training_input_path = f's3://{sm_session.default_bucket()}/datasets/writing_accuracy_dataset/train_dataset_writing_accuracy_no_system.json'
 # define a data input dictonary with our uploaded s3 uris
 data = {'training': training_input_path}
 data
@@ -173,7 +177,7 @@ job_name = f'llama3-instruct-8b-writing-acc-exp1'
 huggingface_estimator = HuggingFace(
     entry_point          = 'run_fsdp_qlora.py',      # train script
     source_dir           = './scripts/fsdp',  # directory which includes all the files needed for training
-    instance_type        = 'ml.g5.12xlarge',  # instances type used for the training job
+    instance_type        = 'ml.g5.12xlarge',  # instances type used for the training job - 70b: ml.g5.48xlarge 7b: ml.g5.12xlarge
     instance_count       = 1,                 # the number of instances used for training
     max_run              = 2*24*60*60,        # maximum runtime in seconds (days * hours * minutes * seconds)
     base_job_name        = job_name,          # the name of the training job
