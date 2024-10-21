@@ -37089,25 +37089,25 @@
 /***/ })
 /******/ ]);
 //# sourceMappingURL=bundle.js.map </script></head><body>
-        <div class="lime top_div" id="top_divYNG0FV6B1895VIF"></div>
+        <div class="lime top_div" id="top_div9F625MJJWIV676D"></div>
         
         <script>
-        var top_div = d3.select('#top_divYNG0FV6B1895VIF').classed('lime top_div', true);
+        var top_div = d3.select('#top_div9F625MJJWIV676D').classed('lime top_div', true);
         
             var pp_div = top_div.append('div')
                                 .classed('lime predict_proba', true);
             var pp_svg = pp_div.append('svg').style('width', '100%');
-            var pp = new lime.PredictProba(pp_svg, ["Non-Science", "Science"], [0.19723238050937653, 0.8027676343917847]);
+            var pp = new lime.PredictProba(pp_svg, ["Non-Science", "Science"], [0.1756809502840042, 0.824319064617157]);
             
         
         var exp_div;
             var exp = new lime.Explanation(["Non-Science", "Science"]);
         
                 exp_div = top_div.append('div').classed('lime explanation', true);
-                exp.show([["WorldCom", 0.21764377820497835], ["Wednesday", -0.09457227691384339], ["Reuters", -0.09187899802050598], ["Ebbers", 0.09031032154956932], ["scandal", -0.07570608440314358], ["billion", -0.05403487217498312], ["Bernard", -0.05309009439689829], ["Executive", -0.046273087648039654], ["client", 0.041375049490674], ["Ex", 0.033361308994552065]], 1, exp_div);
+                exp.show([["WorldCom", 0.2614299662473355], ["Wednesday", -0.10154413493393068], ["Ebbers", 0.09405743559480416], ["Reuters", -0.08619022791477812], ["scandal", -0.07463415351803407], ["Ex", 0.0721567406624808], ["billion", -0.06510289988001962], ["Bernard", -0.06340916113631474], ["client", 0.055937631964884785], ["former", -0.04929774869854944]], 1, exp_div);
                 
         var raw_div = top_div.append('div');
-            exp.show_raw_text([["WorldCom", 3, 0.21764377820497835], ["WorldCom", 78, 0.21764377820497835], ["Wednesday", 313, -0.09457227691384339], ["Reuters", 40, -0.09187899802050598], ["Reuters", 49, -0.09187899802050598], ["Ebbers", 112, 0.09031032154956932], ["scandal", 269, -0.07570608440314358], ["billion", 250, -0.05403487217498312], ["Bernard", 104, -0.05309009439689829], ["Executive", 94, -0.046273087648039654], ["client", 193, 0.041375049490674], ["Ex", 0, 0.033361308994552065]], 1, "Ex-WorldCom CEO Wants Witness Immunity (Reuters) Reuters - Lawyers for former WorldCom  Chief\\Executive Bernard Ebbers are seeking immunity for two witnesses\\who they believe could clear their client of fraud charges\\related to the company's  #36;11 billion accounting scandal,\\according to court papers filed on Wednesday.", raw_div, true);
+            exp.show_raw_text([["WorldCom", 3, 0.2614299662473355], ["WorldCom", 78, 0.2614299662473355], ["Wednesday", 313, -0.10154413493393068], ["Ebbers", 112, 0.09405743559480416], ["Reuters", 40, -0.08619022791477812], ["Reuters", 49, -0.08619022791477812], ["scandal", 269, -0.07463415351803407], ["Ex", 0, 0.0721567406624808], ["billion", 250, -0.06510289988001962], ["Bernard", 104, -0.06340916113631474], ["client", 193, 0.055937631964884785], ["former", 71, -0.04929774869854944]], 1, "Ex-WorldCom CEO Wants Witness Immunity (Reuters) Reuters - Lawyers for former WorldCom  Chief\\Executive Bernard Ebbers are seeking immunity for two witnesses\\who they believe could clear their client of fraud charges\\related to the company's  #36;11 billion accounting scandal,\\according to court papers filed on Wednesday.", raw_div, true);
             
         </script>
         </body></html>

@@ -37089,25 +37089,25 @@
 /***/ })
 /******/ ]);
 //# sourceMappingURL=bundle.js.map </script></head><body>
-        <div class="lime top_div" id="top_divG0TA2Z3WC2NWJK5"></div>
+        <div class="lime top_div" id="top_divWBSSK46L6L7RDOS"></div>
         
         <script>
-        var top_div = d3.select('#top_divG0TA2Z3WC2NWJK5').classed('lime top_div', true);
+        var top_div = d3.select('#top_divWBSSK46L6L7RDOS').classed('lime top_div', true);
         
             var pp_div = top_div.append('div')
                                 .classed('lime predict_proba', true);
             var pp_svg = pp_div.append('svg').style('width', '100%');
-            var pp = new lime.PredictProba(pp_svg, ["Non-Science", "Science"], [0.8204540014266968, 0.17954599857330322]);
+            var pp = new lime.PredictProba(pp_svg, ["Non-Science", "Science"], [0.7853915095329285, 0.21460850536823273]);
             
         
         var exp_div;
             var exp = new lime.Explanation(["Non-Science", "Science"]);
         
                 exp_div = top_div.append('div').classed('lime explanation', true);
-                exp.show([["cards", -0.11466594340252237], ["nets", 0.11436973935404035], ["arrests", -0.10762465734103396], ["dedicated", 0.10532261259916513], ["171", -0.0914669257097096], ["UK", 0.08441161261617934], ["its", -0.06858035815008025], ["fraud", -0.06608596917383276], ["stolen", -0.06151907053840165], ["36", -0.05467041729221968]], 1, exp_div);
+                exp.show([["arrests", -0.12023880907159573], ["nets", 0.11830177323188694], ["171", -0.11098454179709226], ["dedicated", 0.08121960446515354], ["fraud", -0.0760641310304037], ["36", -0.07575990192759519], ["stolen", -0.07518563847249359], ["65m", -0.07419429009375662], ["UK", 0.06568816182150927], ["Card", 0.05789651600449983]], 1, exp_div);
                 
         var raw_div = top_div.append('div');
-            exp.show_raw_text([["cards", 28, -0.11466594340252237], ["cards", 122, -0.11466594340252237], ["nets", 16, 0.11436973935404035], ["arrests", 136, -0.10762465734103396], ["dedicated", 67, 0.10532261259916513], ["171", 132, -0.0914669257097096], ["UK", 62, 0.08441161261617934], ["its", 37, -0.06858035815008025], ["fraud", 5, -0.06608596917383276], ["fraud", 82, -0.06608596917383276], ["stolen", 115, -0.06151907053840165], ["36", 21, -0.05467041729221968], ["36", 108, -0.05467041729221968]], 1, "Card fraud unit nets 36,000 cards In its first two years, the UK's dedicated card fraud unit, has recovered 36,000 stolen cards and 171 arrests - and estimates it saved 65m.", raw_div, true);
+            exp.show_raw_text([["arrests", 136, -0.12023880907159573], ["nets", 16, 0.11830177323188694], ["171", 132, -0.11098454179709226], ["dedicated", 67, 0.08121960446515354], ["fraud", 5, -0.0760641310304037], ["fraud", 82, -0.0760641310304037], ["36", 21, -0.07575990192759519], ["36", 108, -0.07575990192759519], ["stolen", 115, -0.07518563847249359], ["65m", 169, -0.07419429009375662], ["UK", 62, 0.06568816182150927], ["Card", 0, 0.05789651600449983]], 1, "Card fraud unit nets 36,000 cards In its first two years, the UK's dedicated card fraud unit, has recovered 36,000 stolen cards and 171 arrests - and estimates it saved 65m.", raw_div, true);
             
         </script>
         </body></html>

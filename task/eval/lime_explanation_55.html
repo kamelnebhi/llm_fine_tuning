@@ -37089,25 +37089,25 @@
 /***/ })
 /******/ ]);
 //# sourceMappingURL=bundle.js.map </script></head><body>
-        <div class="lime top_div" id="top_divPSCGI78W9DE53D5"></div>
+        <div class="lime top_div" id="top_divFC401OFFJC9LYPQ"></div>
         
         <script>
-        var top_div = d3.select('#top_divPSCGI78W9DE53D5').classed('lime top_div', true);
+        var top_div = d3.select('#top_divFC401OFFJC9LYPQ').classed('lime top_div', true);
         
             var pp_div = top_div.append('div')
                                 .classed('lime predict_proba', true);
             var pp_svg = pp_div.append('svg').style('width', '100%');
-            var pp = new lime.PredictProba(pp_svg, ["Non-Science", "Science"], [0.20831257104873657, 0.7916873693466187]);
+            var pp = new lime.PredictProba(pp_svg, ["Non-Science", "Science"], [0.28491801023483276, 0.7150819897651672]);
             
         
         var exp_div;
             var exp = new lime.Explanation(["Non-Science", "Science"]);
         
                 exp_div = top_div.append('div').classed('lime explanation', true);
-                exp.show([["electronic", 0.6146944512062287], ["Monday", -0.13821096226252397], ["system", 0.10613051323239334], ["collection", 0.082804937587798], ["signed", -0.0731102537386057], ["1", -0.07304941080161789], ["Discounts", -0.06420944708730182], ["went", -0.05934351989360926], ["70", -0.053628231799105544], ["Bridge", 0.033193151238471656]], 1, exp_div);
+                exp.show([["electronic", 0.5639463014920985], ["Monday", -0.1641556878476237], ["Discounts", -0.10218416195390839], ["system", 0.09040164036567634], ["collection", 0.08068870164069357], ["signed", -0.07801477533467775], ["1", -0.0702497418934506], ["motorists", -0.0626189620869261], ["70", -0.05912906898964158], ["Bridge", 0.0341471091312949]], 1, exp_div);
                 
         var raw_div = top_div.append('div');
-            exp.show_raw_text([["electronic", 91, 0.6146944512062287], ["Monday", 34, -0.13821096226252397], ["system", 118, 0.10613051323239334], ["collection", 107, 0.082804937587798], ["signed", 64, -0.0731102537386057], ["1", 137, -0.07304941080161789], ["Discounts", 20, -0.06420944708730182], ["went", 151, -0.05934351989360926], ["70", 47, -0.053628231799105544], ["Bridge", 13, 0.033193151238471656]], 1, "FasTrak Toll Bridge Discounts End Monday About 70,000 motorists signed up for FasTrak, the electronic toll collection system, since July 1, when tolls went up from \\$2 to \\$3.", raw_div, true);
+            exp.show_raw_text([["electronic", 91, 0.5639463014920985], ["Monday", 34, -0.1641556878476237], ["Discounts", 20, -0.10218416195390839], ["system", 118, 0.09040164036567634], ["collection", 107, 0.08068870164069357], ["signed", 64, -0.07801477533467775], ["1", 137, -0.0702497418934506], ["motorists", 54, -0.0626189620869261], ["70", 47, -0.05912906898964158], ["Bridge", 13, 0.0341471091312949]], 1, "FasTrak Toll Bridge Discounts End Monday About 70,000 motorists signed up for FasTrak, the electronic toll collection system, since July 1, when tolls went up from \\$2 to \\$3.", raw_div, true);
             
         </script>
         </body></html>

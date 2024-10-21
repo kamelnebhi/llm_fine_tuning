@@ -37089,25 +37089,25 @@
 /***/ })
 /******/ ]);
 //# sourceMappingURL=bundle.js.map </script></head><body>
-        <div class="lime top_div" id="top_divWTL9IPEMHZQJ19N"></div>
+        <div class="lime top_div" id="top_divAQV2TUUABZDJU3O"></div>
         
         <script>
-        var top_div = d3.select('#top_divWTL9IPEMHZQJ19N').classed('lime top_div', true);
+        var top_div = d3.select('#top_divAQV2TUUABZDJU3O').classed('lime top_div', true);
         
             var pp_div = top_div.append('div')
                                 .classed('lime predict_proba', true);
             var pp_svg = pp_div.append('svg').style('width', '100%');
-            var pp = new lime.PredictProba(pp_svg, ["Non-Science", "Science"], [0.9703934788703918, 0.029606521129608154]);
+            var pp = new lime.PredictProba(pp_svg, ["Non-Science", "Science"], [0.9575220942497253, 0.04247786104679108]);
             
         
         var exp_div;
             var exp = new lime.Explanation(["Non-Science", "Science"]);
         
                 exp_div = top_div.append('div').classed('lime explanation', true);
-                exp.show([["his", -0.03062675599857123], ["Ryan", -0.027664073609040107], ["beatings", -0.02467132956115882], ["police", -0.021942751948975898], ["officers", -0.02069313395416862], ["GAME", 0.01992468906022538], ["Attacking", -0.019257174821188307], ["killed", -0.018895194168284123], ["game", 0.016979038919341608], ["racial", 0.0062090344939675956]], 1, exp_div);
+                exp.show([["GAME", 0.03170184719290539], ["game", 0.028647983015048954], ["Ryan", -0.028207977328342994], ["his", -0.027281295983456594], ["beatings", -0.026019159589209914], ["officers", -0.02380123586209153], ["police", -0.020185724836306398], ["ran", -0.018340957040045753], ["killed", -0.017580786694037943], ["racial", 0.015254670227217108]], 1, exp_div);
                 
         var raw_div = top_div.append('div');
-            exp.show_raw_text([["his", 210, -0.03062675599857123], ["Ryan", 166, -0.027664073609040107], ["beatings", 64, -0.02467132956115882], ["police", 26, -0.021942751948975898], ["police", 188, -0.021942751948975898], ["officers", 33, -0.02069313395416862], ["GAME", 0, 0.01992468906022538], ["Attacking", 16, -0.019257174821188307], ["killed", 231, -0.018895194168284123], ["game", 120, 0.016979038919341608], ["racial", 43, 0.0062090344939675956]], 1, "GAME UNDER FIRE Attacking police officers, racial slurs, bloody beatings of innocent bystanders ... is it really just a game? In four and a half minutes, 14-year-old Ryan Mason ran over a police officer, stole his gun and shot and killed three innocent bystanders.", raw_div, true);
+            exp.show_raw_text([["GAME", 0, 0.03170184719290539], ["game", 120, 0.028647983015048954], ["Ryan", 166, -0.028207977328342994], ["his", 210, -0.027281295983456594], ["beatings", 64, -0.026019159589209914], ["officers", 33, -0.02380123586209153], ["police", 26, -0.020185724836306398], ["police", 188, -0.020185724836306398], ["ran", 177, -0.018340957040045753], ["killed", 231, -0.017580786694037943], ["racial", 43, 0.015254670227217108]], 1, "GAME UNDER FIRE Attacking police officers, racial slurs, bloody beatings of innocent bystanders ... is it really just a game? In four and a half minutes, 14-year-old Ryan Mason ran over a police officer, stole his gun and shot and killed three innocent bystanders.", raw_div, true);
             
         </script>
         </body></html>

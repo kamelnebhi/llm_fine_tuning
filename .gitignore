@@ -3,3 +3,4 @@ slm/wandb/*
 llm/wandb/*
 llm/nohup.out
 task/results/*
+task/baseline_results/*
