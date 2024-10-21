@@ -37089,25 +37089,25 @@
 /***/ })
 /******/ ]);
 //# sourceMappingURL=bundle.js.map </script></head><body>
-        <div class="lime top_div" id="top_divNUCCQR0VZB49D2E"></div>
+        <div class="lime top_div" id="top_divKIV9WWI13WR24U0"></div>
         
         <script>
-        var top_div = d3.select('#top_divNUCCQR0VZB49D2E').classed('lime top_div', true);
+        var top_div = d3.select('#top_divKIV9WWI13WR24U0').classed('lime top_div', true);
         
             var pp_div = top_div.append('div')
                                 .classed('lime predict_proba', true);
             var pp_svg = pp_div.append('svg').style('width', '100%');
-            var pp = new lime.PredictProba(pp_svg, ["Non-Science", "Science"], [0.9703934788703918, 0.029606521129608154]);
+            var pp = new lime.PredictProba(pp_svg, ["Non-Science", "Science"], [0.19723238050937653, 0.8027676343917847]);
             
         
         var exp_div;
             var exp = new lime.Explanation(["Non-Science", "Science"]);
         
                 exp_div = top_div.append('div').classed('lime explanation', true);
-                exp.show([["Ryan", -0.02997967434581969], ["his", -0.028852291416811143], ["beatings", -0.024136911910710625], ["officers", -0.02291393524338276], ["GAME", 0.021040379545277165], ["police", -0.02091175336176778], ["killed", -0.01936705811940634], ["ran", -0.018376622097213573], ["game", 0.014162372738630235], ["racial", 0.007500529033465729]], 1, exp_div);
+                exp.show([["WorldCom", 0.22111163996006306], ["Reuters", -0.09760730800504522], ["Ebbers", 0.09247646680223622], ["Wednesday", -0.09043567870851806], ["scandal", -0.07253838050161451], ["Bernard", -0.05501468806007744], ["Executive", -0.05099501327743724], ["billion", -0.047347459871061745], ["client", 0.035356818077794006], ["Ex", 0.03505443426033442]], 1, exp_div);
                 
         var raw_div = top_div.append('div');
-            exp.show_raw_text([["Ryan", 166, -0.02997967434581969], ["his", 210, -0.028852291416811143], ["beatings", 64, -0.024136911910710625], ["officers", 33, -0.02291393524338276], ["GAME", 0, 0.021040379545277165], ["police", 26, -0.02091175336176778], ["police", 188, -0.02091175336176778], ["killed", 231, -0.01936705811940634], ["ran", 177, -0.018376622097213573], ["game", 120, 0.014162372738630235], ["racial", 43, 0.007500529033465729]], 1, "GAME UNDER FIRE Attacking police officers, racial slurs, bloody beatings of innocent bystanders ... is it really just a game? In four and a half minutes, 14-year-old Ryan Mason ran over a police officer, stole his gun and shot and killed three innocent bystanders.", raw_div, true);
+            exp.show_raw_text([["WorldCom", 3, 0.22111163996006306], ["WorldCom", 78, 0.22111163996006306], ["Reuters", 40, -0.09760730800504522], ["Reuters", 49, -0.09760730800504522], ["Ebbers", 112, 0.09247646680223622], ["Wednesday", 313, -0.09043567870851806], ["scandal", 269, -0.07253838050161451], ["Bernard", 104, -0.05501468806007744], ["Executive", 94, -0.05099501327743724], ["billion", 250, -0.047347459871061745], ["client", 193, 0.035356818077794006], ["Ex", 0, 0.03505443426033442]], 1, "Ex-WorldCom CEO Wants Witness Immunity (Reuters) Reuters - Lawyers for former WorldCom  Chief\\Executive Bernard Ebbers are seeking immunity for two witnesses\\who they believe could clear their client of fraud charges\\related to the company's  #36;11 billion accounting scandal,\\according to court papers filed on Wednesday.", raw_div, true);
             
         </script>
         </body></html>

@@ -37089,25 +37089,25 @@
 /***/ })
 /******/ ]);
 //# sourceMappingURL=bundle.js.map </script></head><body>
-        <div class="lime top_div" id="top_div0R1L99F0LP3SCSA"></div>
+        <div class="lime top_div" id="top_divPQF7CDMPJ20UJS1"></div>
         
         <script>
-        var top_div = d3.select('#top_div0R1L99F0LP3SCSA').classed('lime top_div', true);
+        var top_div = d3.select('#top_divPQF7CDMPJ20UJS1').classed('lime top_div', true);
         
             var pp_div = top_div.append('div')
                                 .classed('lime predict_proba', true);
             var pp_svg = pp_div.append('svg').style('width', '100%');
-            var pp = new lime.PredictProba(pp_svg, ["Non-Science", "Science"], [0.19723238050937653, 0.8027676343917847]);
+            var pp = new lime.PredictProba(pp_svg, ["Non-Science", "Science"], [0.07731174677610397, 0.9226882457733154]);
             
         
         var exp_div;
             var exp = new lime.Explanation(["Non-Science", "Science"]);
         
                 exp_div = top_div.append('div').classed('lime explanation', true);
-                exp.show([["WorldCom", 0.22102197880816257], ["Reuters", -0.09568036811183753], ["Ebbers", 0.08922437602608159], ["Wednesday", -0.08797271700461097], ["scandal", -0.07825312621104438], ["Bernard", -0.05589421828885438], ["billion", -0.05321283758078992], ["Executive", -0.042719961172767426], ["client", 0.036471407559196416], ["Ex", 0.03393478068220703]], 1, exp_div);
+                exp.show([["Micro", 0.4572205985701777], ["Devices", 0.23030886182055518], ["quarter", -0.09418727398838045], ["profit", -0.07390237869779284], ["third", -0.06403572018147997], ["fell", -0.06286205582744422], ["chip", 0.05970303435294331], ["second", -0.0341169724023845], ["meets", 0.021354397770348657], ["Advanced", 0.017487298925174723]], 1, exp_div);
                 
         var raw_div = top_div.append('div');
-            exp.show_raw_text([["WorldCom", 3, 0.22102197880816257], ["WorldCom", 78, 0.22102197880816257], ["Reuters", 40, -0.09568036811183753], ["Reuters", 49, -0.09568036811183753], ["Ebbers", 112, 0.08922437602608159], ["Wednesday", 313, -0.08797271700461097], ["scandal", 269, -0.07825312621104438], ["Bernard", 104, -0.05589421828885438], ["billion", 250, -0.05321283758078992], ["Executive", 94, -0.042719961172767426], ["client", 193, 0.036471407559196416], ["Ex", 0, 0.03393478068220703]], 1, "Ex-WorldCom CEO Wants Witness Immunity (Reuters) Reuters - Lawyers for former WorldCom  Chief\\Executive Bernard Ebbers are seeking immunity for two witnesses\\who they believe could clear their client of fraud charges\\related to the company's  #36;11 billion accounting scandal,\\according to court papers filed on Wednesday.", raw_div, true);
+            exp.show_raw_text([["Micro", 9, 0.4572205985701777], ["Micro", 89, 0.4572205985701777], ["Devices", 15, 0.23030886182055518], ["Devices", 95, 0.23030886182055518], ["quarter", 56, -0.09418727398838045], ["quarter", 125, -0.09418727398838045], ["quarter", 208, -0.09418727398838045], ["profit", 133, -0.07390237869779284], ["third", 50, -0.06403572018147997], ["third", 119, -0.06403572018147997], ["fell", 187, -0.06286205582744422], ["chip", 233, 0.05970303435294331], ["second", 201, -0.0341169724023845], ["meets", 23, 0.021354397770348657], ["Advanced", 0, 0.017487298925174723], ["Advanced", 80, 0.017487298925174723]], 1, "Advanced Micro Devices meets reduced forecast for third quarter SAN FRANCISCO - Advanced Micro Devices Inc. reported a third-quarter profit from a loss a year-earlier on today, but sales fell from the second quarter in line with the chip maker #39;s recently reduced outlook.", raw_div, true);
             
         </script>
         </body></html>
