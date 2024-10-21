@@ -13,7 +13,7 @@ This repository contains Jupyter notebooks designed to fine-tune various large l
 
 ## Overview
 
-Fine-tuning large language models (LLMs) allows you to adapt pre-trained models to specific tasks or datasets. This repository includes a collection of notebooks that cover fine-tuning different models using popular frameworks like Hugging Face's Transformers, PyTorch, and TensorFlow.
+Fine-tuning large language models (LLMs) allows you to adapt pre-trained models to specific tasks or datasets. This repository includes a collection of notebooks that cover fine-tuning different models using popular frameworks like Hugging Face's Transformers and PyTorch.
 
 ## Requirements
 
@@ -27,3 +27,5 @@ You can install the dependencies with:
 
 ```bash
 pip install -r requirements.txt
+```
+
