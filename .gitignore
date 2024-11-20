@@ -1,5 +1,6 @@
 slm/nohup.out
 slm/wandb/*
+slm/mlruns/*
 llm/wandb/*
 llm/nohup.out
 task/results/*
