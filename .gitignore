@@ -4,3 +4,9 @@ llm/wandb/*
 llm/nohup.out
 task/results/*
 task/baseline_results/*
+setfit/checkpoints/*
+setfit/mlruns/*
+setfit/data/*
+setfit/tmp_trainer/*
+
+
