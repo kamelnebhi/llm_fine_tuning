@@ -7,6 +7,7 @@
 import torch
 training_device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 training_device
+import numpy as np
 
 
 # In[ ]:
@@ -197,4 +198,23 @@ trainer.train()
 
 
 print(trainer.evaluate())
+
+
+# In[ ]:
+
+
+predictions = trainer.predict(tokenized_test)
+logits = predictions.predictions
+
+predic_ = np.argmax(logits, axis=-1)
+ref = predictions.label_ids
+#print(predic_)
+#print(predictions.predictions, predictions.label_ids)
+
+from sklearn.metrics import cohen_kappa_score
+ck = round(cohen_kappa_score(predic_, ref, weights="quadratic"), 2)
+print("cohen kappa==> ",ck)
+
+from sklearn.metrics import classification_report
+print(classification_report(ref, predic_))
 
