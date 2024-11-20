@@ -1,6 +1,8 @@
 slm/nohup.out
 slm/wandb/*
 slm/mlruns/*
+slm/cefr_token_class/results/*
+slm/cefr_token_class/mlruns/*
 llm/wandb/*
 llm/nohup.out
 task/results/*
