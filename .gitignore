@@ -4,6 +4,7 @@ slm/mlruns/*
 slm/cefr_token_class/results/*
 slm/cefr_token_class/mlruns/*
 slm/cefr_evp_text_classifier/mlruns/*
+slm/accuracy_text_classifier/mlruns/*
 llm/wandb/*
 llm/nohup.out
 task/results/*
@@ -13,5 +14,6 @@ setfit/mlruns/*
 setfit/data/*
 setfit/tmp_trainer/*
 model_saved/*
+
 
 
