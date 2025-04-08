@@ -14,6 +14,7 @@ setfit/mlruns/*
 setfit/data/*
 setfit/tmp_trainer/*
 model_saved/*
+slm/ef_camdat_augmented_classifier/.gradio
 
 
 
