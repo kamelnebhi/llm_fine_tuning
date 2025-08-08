@@ -174,7 +174,7 @@ def train_model(tokenized_train, tokenized_test, num_labels, output_dir):
 
 def detailed_evaluation(trainer, tokenized_valid):
     unique_tasks = set(tokenized_valid["task_id"])
-    unique_levels = set(tokenized_valid["level_title"])
+    unique_levels = set(tokenized_valid["ef_level"])
 
     def safe_metrics(ref_labels, predicted_labels):
         result = {
@@ -225,7 +225,7 @@ def detailed_evaluation(trainer, tokenized_valid):
 
         results_tasks.append({
             "task_id": t,
-            "level_title": sub_ds["level_title"][0],
+            "ef_level": sub_ds["ef_level"][0],
             "accuracy": metrics["accuracy"],
             "precision": metrics["precision"],
             "recall": metrics["recall"],
@@ -237,7 +237,7 @@ def detailed_evaluation(trainer, tokenized_valid):
 
     results_levels = []
     for l in unique_levels:
-        sub_ds = tokenized_valid.filter(lambda example: example['level_title'] == l)
+        sub_ds = tokenized_valid.filter(lambda example: example['ef_level'] == l)
         if len(sub_ds) < 2:
             print(f"[!] Level {l} ignored : not enouth samples")
             continue
@@ -250,7 +250,7 @@ def detailed_evaluation(trainer, tokenized_valid):
         metrics = safe_metrics(ref_labels, predicted_labels)
 
         results_levels.append({
-            "level_title": l,
+            "ef_level": l,
             "accuracy": metrics["accuracy"],
             "precision": metrics["precision"],
             "recall": metrics["recall"],
