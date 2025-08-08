@@ -29,11 +29,25 @@ import wandb
 # Initialize a W&B run
 wandb.init(project='writing_task_class_ai_acc', entity='knebhi')
 
+median_map = {
+    "A1": 2,
+    "A2": 5,
+    "B1": 8,
+    "B2": 11,
+    "C1": 14,
+    "C2": 16
+}
 
 
 def prepare_data(csv_path="data/acc_data.csv"):
     df = pd.read_csv(csv_path)
-    #df = df[:3000]
+    df = df[:3000]
+    
+    print(df["ef_level"].value_counts())
+
+    df['ef_level'] = df.apply(lambda row: median_map[row['cefr_level']] if pd.isna(row['ef_level']) else row['ef_level'], axis=1)
+
+    print(df["ef_level"].value_counts())
 
     # Create the combined text field
     df['text'] = (
@@ -46,6 +60,11 @@ def prepare_data(csv_path="data/acc_data.csv"):
     df = df.rename(columns={'majority_value': 'label'})
     df.dropna(subset=['label', 'text'], inplace=True)
     df.reset_index(drop=True, inplace=True)
+
+    #df_balanced = df.groupby('label').apply(lambda x: x.sample(n=min(len(x), 1000), random_state=42)).reset_index(drop=True)
+
+    # Résultat : un dataset équilibré avec max n lignes par label
+    print(df['label'].value_counts())
 
     ds = Dataset.from_pandas(df)
 
@@ -130,13 +149,13 @@ def train_model(tokenized_train, tokenized_test, num_labels, output_dir):
         save_steps=200,
         eval_steps=200,
         save_total_limit=4,
-        learning_rate=2e-5,
-        warmup_ratio=0.1,
-        lr_scheduler_type="linear",
-        per_device_train_batch_size=16,
-        per_device_eval_batch_size=16,
-        num_train_epochs=4,
-        weight_decay=0.01,
+        learning_rate=1e-5,               # plus bas pour meilleure stabilité
+        warmup_ratio=0.05,                # moins de warmup
+        lr_scheduler_type="cosine",       # scheduler alternatif
+        per_device_train_batch_size=32,  # batch plus grand si possible
+        per_device_eval_batch_size=32,
+        num_train_epochs=5,               # plus d’époques
+        weight_decay=0.001,               # moins de régularisation
         load_best_model_at_end=True,
         metric_for_best_model="f1",
         logging_steps=100,
@@ -254,6 +273,7 @@ def main():
     print("Preparing data...")
     dataset = prepare_data()
 
+    '''
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained("FacebookAI/roberta-large")
 
@@ -273,7 +293,7 @@ def main():
 
     print("Performing detailed evaluation on validation set...")
     detailed_evaluation(trainer, tokenized_valid)
-
-
+    '''
+    
 if __name__ == "__main__":
     main()
