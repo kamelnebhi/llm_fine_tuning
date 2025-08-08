@@ -41,20 +41,18 @@ median_map = {
 
 def prepare_data(csv_path="data/acc_data.csv"):
     df = pd.read_csv(csv_path)
-    df = df[:3000]
-    
-    #df['ef_level'] = df.apply(lambda row: median_map[row['cefr_level']] if pd.isna(row['ef_level']) else row['ef_level'], axis=1)
+    #df = df[:3000]
 
-    #print(df["ef_level"].value_counts())
+    df['ef_level'] = df.apply(lambda row: median_map[row['cefr_level']] if pd.isna(row['ef_level']) else row['ef_level'], axis=1)
 
     # Create the combined text field
     df['text'] = (
-        "Prompt Level: " + df['level_title'].astype(str) +
+        "Prompt Level: " + df['ef_level'].astype(str) +
         " [SEP] Prompt: " + df['activity_instructions'] +
         " [SEP] Response: " + df['student_submission']
     )
 
-    df = df[["text", "task_id", "level_title", "majority_value"]]
+    df = df[["text", "task_id", "ef_level", "majority_value"]]
     df = df.rename(columns={'majority_value': 'label'})
     df.dropna(subset=['label', 'text'], inplace=True)
     df.reset_index(drop=True, inplace=True)
@@ -271,7 +269,6 @@ def main():
     print("Preparing data...")
     dataset = prepare_data()
 
-    '''
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained("FacebookAI/roberta-large")
 
@@ -291,7 +288,7 @@ def main():
 
     print("Performing detailed evaluation on validation set...")
     detailed_evaluation(trainer, tokenized_valid)
-    '''
+    
     
 if __name__ == "__main__":
     main()
