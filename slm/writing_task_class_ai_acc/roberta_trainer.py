@@ -43,11 +43,9 @@ def prepare_data(csv_path="data/acc_data.csv"):
     df = pd.read_csv(csv_path)
     df = df[:3000]
     
-    print(df["ef_level"].value_counts())
+    #df['ef_level'] = df.apply(lambda row: median_map[row['cefr_level']] if pd.isna(row['ef_level']) else row['ef_level'], axis=1)
 
-    df['ef_level'] = df.apply(lambda row: median_map[row['cefr_level']] if pd.isna(row['ef_level']) else row['ef_level'], axis=1)
-
-    print(df["ef_level"].value_counts())
+    #print(df["ef_level"].value_counts())
 
     # Create the combined text field
     df['text'] = (
