@@ -22,6 +22,17 @@ from sklearn.metrics import (
     classification_report,
 )
 from scipy.stats import pearsonr
+import boto3
+
+
+region_name = 'us-east-1'
+profile_name = 'lsd-sandbox'
+bucket_name = 'sagemaker-studio-oxs6vznjds'
+
+# Initialize session and S3 client
+session = boto3.Session()
+s3_client = session.client('s3')
+
 
 
 import wandb
@@ -135,23 +146,26 @@ def tokenize_dataset(dataset, tokenizer, max_length=256):
     return tokenized_train, tokenized_test, tokenized_valid
 
 
-def train_model(tokenized_train, tokenized_test, num_labels, output_dir):
-    model = RobertaForSequenceClassification.from_pretrained("FacebookAI/roberta-large", num_labels=num_labels)
+def train_model(tokenized_train, tokenized_test, num_labels, output_dir, tokenizer):
+    model = RobertaForSequenceClassification.from_pretrained(
+        "FacebookAI/roberta-large",
+        num_labels=num_labels
+    )
 
     training_args = TrainingArguments(
         output_dir=output_dir,
-        eval_strategy="steps",
+        eval_strategy="steps",  # ← c'était "eval_strategy" avant, qui n'existe pas
         save_strategy="steps",
         save_steps=200,
         eval_steps=200,
         save_total_limit=4,
-        learning_rate=1e-5,               # plus bas pour meilleure stabilité
-        warmup_ratio=0.05,                # moins de warmup
-        lr_scheduler_type="cosine",       # scheduler alternatif
-        per_device_train_batch_size=32,  # batch plus grand si possible
+        learning_rate=1e-5,
+        warmup_ratio=0.05,
+        lr_scheduler_type="cosine",
+        per_device_train_batch_size=32,
         per_device_eval_batch_size=32,
-        num_train_epochs=5,               # plus d’époques
-        weight_decay=0.001,               # moins de régularisation
+        num_train_epochs=5,
+        weight_decay=0.001,
         load_best_model_at_end=True,
         metric_for_best_model="f1",
         logging_steps=100,
@@ -168,6 +182,14 @@ def train_model(tokenized_train, tokenized_test, num_labels, output_dir):
 
     trainer.train()
     eval_results = trainer.evaluate()
+
+    # Sauvegarde le meilleur modèle et tokenizer
+    best_model_path = trainer.state.best_model_checkpoint
+    print(f"Meilleur modèle sauvegardé à: {best_model_path}")
+    
+    trainer.save_model(best_model_path)
+    model.save_pretrained(best_model_path, from_pt=True)
+    tokenizer.save_pretrained(best_model_path)
 
     return trainer, eval_results
 
@@ -265,6 +287,27 @@ def detailed_evaluation(trainer, tokenized_valid):
     pd.DataFrame(results_levels).to_csv("result_eval_data_roberta_large_acc_by_level.csv", index=False)
 
 
+def upload_model_to_s3(local_dir, bucket_name, s3_prefix):
+    """
+    Envoie un modèle Hugging Face sauvegardé localement vers un bucket S3.
+
+    Args:
+        local_dir (str): Chemin local du dossier contenant le modèle.
+        bucket_name (str): Nom du bucket S3.
+        s3_prefix (str): Chemin (préfixe) dans le bucket S3.
+    """
+    s3 = boto3.client('s3')
+
+    for root, dirs, files in os.walk(local_dir):
+        for file in files:
+            local_path = os.path.join(root, file)
+            relative_path = os.path.relpath(local_path, local_dir)
+            s3_path = os.path.join(s3_prefix, relative_path).replace("\\", "/")  # Compatibilité Windows/Linux
+
+            print(f"Upload de {local_path} vers s3://{bucket_name}/{s3_path}")
+            s3.upload_file(local_path, bucket_name, s3_path)
+
+
 def main():
     print("Preparing data...")
     dataset = prepare_data()
@@ -280,8 +323,8 @@ def main():
     print(f"Number of labels: {num_labels}")
 
     print("Training model...")
-    output_dir = "../../../model_saved/roberta-large-ft-acc-writing-task-augmented"
-    trainer, eval_results = train_model(tokenized_train, tokenized_test, num_labels, output_dir)
+    output_dir = "model_saved/roberta-large-ft-acc-writing-task-augmented"
+    trainer, eval_results = train_model(tokenized_train, tokenized_test, num_labels, output_dir, tokenizer)
 
     print("Evaluation results on test set:")
     print(eval_results)
@@ -289,6 +332,9 @@ def main():
     print("Performing detailed evaluation on validation set...")
     detailed_evaluation(trainer, tokenized_valid)
     
+    #print("Saving model to s3 bucket...")
+    #upload_model_to_s3("model_saved/roberta-large-ft-acc-writing-task-augmented", bucket_name, "writing_task_models/accuracy/")
+        
     
 if __name__ == "__main__":
     main()
