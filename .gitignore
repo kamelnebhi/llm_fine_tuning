@@ -17,3 +17,6 @@ model_saved/*
 slm/ef_camdat_augmented_classifier/.gradio
 slm/writing_task_class_ai_acc/wandb/*
 slm/writing_task_class_ai_acc/model_saved/*
+slm/writing_task_class_ai_coh/wandb/*
+slm/writing_task_class_ai_coh/model_saved/*
+
