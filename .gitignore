@@ -21,5 +21,8 @@ slm/writing_task_class_ai_coh/wandb/*
 slm/writing_task_class_ai_coh/model_saved/*
 slm/writing_task_class_ai_coh/.gradio/*
 slm/writing_task_class_ai_demo/.gradio/*
+slm/gec_fine_tuning/t5-grammar-corrector/*
+slm/gec_fine_tuning/data/*
+
 
 
