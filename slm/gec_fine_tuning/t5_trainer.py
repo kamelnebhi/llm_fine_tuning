@@ -52,37 +52,67 @@ print(f"Training device: {training_device}")
 # =========================
 # 3️⃣ Load CSV from S3
 # =========================
+import boto3
+import pandas as pd
+from datasets import Dataset, DatasetDict, load_dataset
+
+# Load CSV from S3
 s3_client = boto3.client('s3', region_name='us-east-1')
 obj = s3_client.get_object(Bucket=bucket_name, Key=key)
 df = pd.read_csv(obj['Body'])
-df = df[:5000]  # optional limit rows
-print(df.shape)
+df = df[:5000]  # optional limit
+print("Custom CSV shape:", df.shape)
 
 # Keep only relevant columns
-df = df[["writing_id", "activity_instructions", "writing_content", "corrected_writing"]]
+df = df[["writing_id", "writing_content", "corrected_writing"]]
 
-# Rename columns for HF dataset
+# Rename columns for Hugging Face dataset
 df_hf = df.rename(columns={
     "writing_id": "_id",
-    "activity_instructions": "task",
     "writing_content": "src",
     "corrected_writing": "tgt"
 })
 
 # Convert to HF Dataset
-dataset = Dataset.from_pandas(df_hf, preserve_index=False)
+ds_custom = Dataset.from_pandas(df_hf, preserve_index=False)
 
 # =========================
-# 4️⃣ Train/Validation/Test Split
+# 3️⃣b Load Grammarly GEC dataset
 # =========================
-split1 = dataset.train_test_split(test_size=0.3, seed=42)
-split2 = split1['test'].train_test_split(test_size=0.5, seed=42)
+ds_grammarly = load_dataset("dim/grammarly_coedit")
+ds_grammarly = ds_grammarly["train"].filter(lambda x: x["task"] == "gec")
+ds_grammarly = ds_grammarly.remove_columns(["task"])
+
+print("Grammarly GEC dataset size:", ds_grammarly.num_rows)
+
+# =========================
+# 3️⃣c Concatenate datasets via DataFrame
+# =========================
+df1 = ds_custom.to_pandas()
+df2 = ds_grammarly.to_pandas()
+
+merged_df = pd.concat([df1, df2], ignore_index=True)
+
+# Reset _id to avoid duplicates
+merged_df["_id"] = merged_df.index.astype(str)
+
+# Convert back to HF Dataset
+ds_merged = Dataset.from_pandas(merged_df, preserve_index=False)
+print("Merged dataset size:", ds_merged.num_rows)
+
+# =========================
+# 4️⃣ Train / Validation / Test Split
+# =========================
+split1 = ds_merged.train_test_split(test_size=0.3, seed=42)  # 70% train, 30% remaining
+split2 = split1['test'].train_test_split(test_size=0.5, seed=42)  # 15% val, 15% test
 
 ds_ft = DatasetDict({
     "train": split1['train'],
     "validation": split2['train'],
     "test": split2['test']
 })
+
+print(ds_ft)
 
 # =========================
 # 5️⃣ Load Tokenizer & Model
