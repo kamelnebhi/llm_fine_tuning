@@ -24,6 +24,7 @@ slm/writing_task_class_ai_demo/.gradio/*
 slm/gec_fine_tuning/t5-grammar-corrector/*
 slm/gec_fine_tuning/data/*
 slm/gec_fine_tuning/wandb/*
+slm/gec_fine_tuning/m2score/*
 
 
 
