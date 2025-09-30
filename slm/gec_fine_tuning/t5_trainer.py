@@ -41,7 +41,7 @@ wandb.init(project='writing_gec', entity='knebhi')
 # 2️⃣ S3 & Model Parameters
 # =========================
 bucket_name = 'sagemaker-studio-oxs6vznjds'
-key = 'writing_gec/data/writing_corrections_2024-12-17_17_23_54.csv'
+key = 'writing_gec/data/writing_corrections.csv'
 
 MODELNAME = "t5-base"
 PREFIX = "grammar: "
@@ -60,17 +60,17 @@ from datasets import Dataset, DatasetDict, load_dataset
 s3_client = boto3.client('s3', region_name='us-east-1')
 obj = s3_client.get_object(Bucket=bucket_name, Key=key)
 df = pd.read_csv(obj['Body'])
-df = df[:5000]  # optional limit
+df = df.dropna(subset=["original_text", "corrected_text"])
 print("Custom CSV shape:", df.shape)
 
 # Keep only relevant columns
-df = df[["writing_id", "writing_content", "corrected_writing"]]
+df = df[["id", "original_text", "corrected_text"]]
 
 # Rename columns for Hugging Face dataset
 df_hf = df.rename(columns={
-    "writing_id": "_id",
-    "writing_content": "src",
-    "corrected_writing": "tgt"
+    "id": "_id",
+    "original_text": "src",
+    "corrected_text": "tgt"
 })
 
 # Convert to HF Dataset
@@ -90,6 +90,16 @@ print("Grammarly GEC dataset size:", ds_grammarly.num_rows)
 # =========================
 df1 = ds_custom.to_pandas()
 df2 = ds_grammarly.to_pandas()
+
+def fix(example):
+    # Remove the numeric prefix before colon
+    string_list = example["src"].split(":")
+    text = " ".join(string_list[1:]).strip()
+    example["src"] = text
+    return example
+
+# Apply the cleaning function
+df2 = df2.apply(fix, axis=1)
 
 merged_df = pd.concat([df1, df2], ignore_index=True)
 
@@ -123,26 +133,23 @@ model = T5ForConditionalGeneration.from_pretrained(MODELNAME)
 # =========================
 # 6️⃣ Preprocessing
 # =========================
-def fix(example):
-    """Remove numeric prefix before colon from source text."""
-    parts = example["src"].split(":")
-    example["src"] = " ".join(parts[1:]).strip()
-    return example
-
-ds_ft["train"] = ds_ft["train"].map(fix)
-
 train_ds = ds_ft["train"]
 val_ds = ds_ft["validation"]
 
 def preprocess(example):
-    """Tokenize inputs and labels."""
     input_text = PREFIX + example["src"]
     target_text = example["tgt"]
     model_inputs = tokenizer(input_text, truncation=True, padding="max_length", max_length=256)
-    labels = tokenizer(target_text, truncation=True, padding="max_length", max_length=256)
 
-    model_inputs["labels"] = labels["input_ids"]
+    labels = tokenizer(target_text, truncation=True, padding="max_length", max_length=256)
+    labels_ids = labels["input_ids"]
+
+    # Important : remplacer les pad_token_id par -100
+    labels_ids = [id if id != tokenizer.pad_token_id else -100 for id in labels_ids]
+
+    model_inputs["labels"] = labels_ids
     return model_inputs
+
 
 tokenized_train = train_ds.map(preprocess, batched=False)
 tokenized_val = val_ds.map(preprocess, batched=False)
@@ -156,29 +163,24 @@ exact_match = evaluate.load("exact_match")
 # Compute metrics for Trainer
 # =========================
 def compute_metrics(eval_pred):
-    """
-    Compute metrics for seq2seq Trainer:
-    - Exact match
-    - BLEU
-    """
     predictions, labels = eval_pred
 
-    # Decode predictions and labels
+    # predictions peuvent contenir des IDs invalides → clip
+    predictions = np.clip(predictions, 0, tokenizer.vocab_size - 1)
     decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
-    labels_clean = np.where(labels != -100, labels, tokenizer.pad_token_id)
-    decoded_labels = tokenizer.batch_decode(labels_clean, skip_special_tokens=True)
+
+    # labels
+    labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+    decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
     # Exact match
     em = exact_match.compute(predictions=decoded_preds, references=decoded_labels)["exact_match"]
 
-    # BLEU
+    # BLEU via sacrebleu
     bleu = sacrebleu.corpus_bleu(decoded_preds, [decoded_labels])
     bleu_score = bleu.score
 
-    return {
-        "exact_match": em,
-        "bleu": bleu_score
-    }
+    return {"exact_match": em, "bleu": bleu_score}
 
 
 # =========================
