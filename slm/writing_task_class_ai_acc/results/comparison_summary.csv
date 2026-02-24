@@ -1,0 +1,2 @@
+experiment,accuracy,qwk,lwk,pearson,adjacent_acc,mae,n_samples,n_errors
+agreement_eq100,0.7363,0.91,0.815,0.91,0.9857,0.2827,421,111

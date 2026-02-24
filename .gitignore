@@ -25,7 +25,7 @@ slm/gec_fine_tuning/t5-grammar-corrector/*
 slm/gec_fine_tuning/data/*
 slm/gec_fine_tuning/wandb/*
 slm/gec_fine_tuning/m2score/*
-
+*.db
 
 
 
