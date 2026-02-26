@@ -1,0 +1,7 @@
+class,n_samples,accuracy,adjacent_acc,mae,n_errors,top_confusions
+Score 0,486,0.9012,0.9753,0.1337,48,"Score 1(36), Score 2(8), Score 3(3)"
+Score 1,132,0.6515,0.9848,0.3636,46,"Score 2(27), Score 0(17), Score 3(2)"
+Score 2,198,0.5455,0.9596,0.4949,90,"Score 3(56), Score 1(26), Score 0(6)"
+Score 3,128,0.7031,0.9688,0.3516,38,"Score 2(20), Score 4(14), Score 0(3)"
+Score 4,125,0.568,0.976,0.48,54,"Score 5(26), Score 3(25), Score 2(1)"
+Score 5,109,0.8807,1.0,0.1193,13,Score 4(13)

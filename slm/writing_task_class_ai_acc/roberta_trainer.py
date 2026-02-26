@@ -5,14 +5,16 @@ import json
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn as nn
 from collections import Counter
-from datasets import Dataset, DatasetDict, ClassLabel
+from datasets import Dataset, ClassLabel
 from transformers import (
     AutoTokenizer,
-    RobertaForSequenceClassification,
+    RobertaModel,
     TrainingArguments,
     Trainer,
 )
+from transformers.modeling_outputs import SequenceClassifierOutput
 from sklearn.metrics import (
     accuracy_score,
     precision_recall_fscore_support,
@@ -27,7 +29,7 @@ region_name    = 'us-east-1'
 profile_name   = 'lsd-sandbox'
 bucket_name    = 'sagemaker-studio-oxs6vznjds'
 CSV_PATH       = "data_v2/sample_data_acc_gec.csv"
-FIXED_EVAL_DIR = "data_v2/fixed_eval"   # val + test saved here once
+FIXED_EVAL_DIR = "data_v2/fixed_eval"
 NUM_LABELS     = 6
 LABEL_NAMES    = [f"Score {i}" for i in range(NUM_LABELS)]
 
@@ -40,7 +42,84 @@ s3_client = session.client('s3')
 
 
 # ============================================================
-# ORDINAL TRAINER  (unchanged)
+# TWO-TOWER MODEL  (shared RoBERTa-large encoder)
+# ============================================================
+class TwoTowerRoberta(nn.Module):
+    """
+    Shared-encoder two-tower model.
+    Tower A : level + prompt + student response  (up to max_length tokens)
+    Tower B : correction                          (up to max_length tokens)
+    Head    : [CLS_A ; CLS_B ; CLS_A - CLS_B]  →  3 * 1024 → 512 → num_labels
+    """
+    def __init__(self, model_name: str, num_labels: int, dropout: float = 0.1):
+        super().__init__()
+        self.encoder    = RobertaModel.from_pretrained(model_name)
+        hidden_size     = self.encoder.config.hidden_size   # 1024 for roberta-large
+        self.num_labels = num_labels
+
+        self.classifier = nn.Sequential(
+            nn.Linear(3 * hidden_size, 512),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(512, num_labels),
+        )
+
+    def encode(self, input_ids, attention_mask):
+        return self.encoder(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+        ).last_hidden_state[:, 0, :]   # [CLS] token
+
+    def forward(
+        self,
+        input_ids_a,
+        attention_mask_a,
+        input_ids_b,
+        attention_mask_b,
+        labels=None,
+        sample_weight=None,
+        **kwargs,
+    ):
+        cls_a    = self.encode(input_ids_a, attention_mask_a)
+        cls_b    = self.encode(input_ids_b, attention_mask_b)
+        # Enriched fusion: gives the model an explicit difference signal
+        combined = torch.cat([cls_a, cls_b, cls_a - cls_b], dim=-1)
+        logits   = self.classifier(combined)
+
+        return SequenceClassifierOutput(loss=None, logits=logits)
+
+
+# ============================================================
+# DATA COLLATOR  — handles two-tower fields + optional sample_weight
+# ============================================================
+class TwoTowerDataCollator:
+    """
+    Collates only tensor fields.
+    - Renames 'label' → 'labels' as expected by the Trainer.
+    - 'sample_weight' is optional (absent in eval sets).
+    """
+    TENSOR_FIELDS = [
+        "input_ids_a", "attention_mask_a",
+        "input_ids_b", "attention_mask_b",
+        "label", "sample_weight",
+    ]
+
+    def __call__(self, features):
+        batch = {}
+        for field in self.TENSOR_FIELDS:
+            if field not in features[0]:
+                continue
+            dtype = torch.float32 if field == "sample_weight" else torch.long
+            batch[field] = torch.tensor(
+                [f[field] for f in features], dtype=dtype
+            )
+        if "label" in batch:
+            batch["labels"] = batch.pop("label")
+        return batch
+
+
+# ============================================================
+# ORDINAL TRAINER  — soft Gaussian labels + per-sample weights
 # ============================================================
 class OrdinalTrainer(Trainer):
     def __init__(self, *args, sigma=1.0, **kwargs):
@@ -48,74 +127,115 @@ class OrdinalTrainer(Trainer):
         self.sigma = sigma
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        labels  = inputs.pop("labels")
-        outputs = model(**inputs)
-        logits  = outputs.logits
+        labels         = inputs.pop("labels")
+        sample_weights = inputs.pop("sample_weight", None)   # absent in eval
+        outputs        = model(**inputs)
+        logits         = outputs.logits
 
         num_labels = logits.shape[-1]
         device     = logits.device
         classes    = torch.arange(num_labels, device=device).float()
 
+        # Gaussian soft labels centred on the true class
         soft_labels = torch.exp(
             -((classes.unsqueeze(0) - labels.unsqueeze(1).float()) ** 2)
             / (2 * self.sigma ** 2)
         )
         soft_labels = soft_labels / soft_labels.sum(dim=-1, keepdim=True)
 
-        log_probs = torch.log_softmax(logits, dim=-1)
-        loss = -(soft_labels * log_probs).sum(dim=-1).mean()
+        log_probs       = torch.log_softmax(logits, dim=-1)
+        per_sample_loss = -(soft_labels * log_probs).sum(dim=-1)
+
+        # Apply combined agreement × class-frequency weight
+        if sample_weights is not None:
+            loss = (per_sample_loss * sample_weights.to(device)).mean()
+        else:
+            loss = per_sample_loss.mean()
 
         return (loss, outputs) if return_outputs else loss
 
+    # ── safe checkpoint saving for custom nn.Module ────────────────────────
+    def _save_model(self, output_dir, state_dict=None):
+        os.makedirs(output_dir, exist_ok=True)
+        if state_dict is None:
+            state_dict = self.model.state_dict()
+        torch.save(state_dict, os.path.join(output_dir, "pytorch_model.bin"))
+
 
 # ============================================================
-# SHARED TEXT PREPROCESSING
+# SHARED TEXT PREPROCESSING  — now produces text_a / text_b
 # ============================================================
 def preprocess_df(df_raw: pd.DataFrame) -> pd.DataFrame:
-    """
-    Text engineering shared across all splits.
-    df_raw must already have an 'orig_idx' column (set before any row filtering
-    so indices are stable across different agreement-threshold runs).
-    Returns df with: orig_idx, text, task_id, ef_level, label, agreement_percentage
-    """
     df = df_raw.copy()
     df['ef_level'] = df.apply(
         lambda row: median_map[row['cefr_level']] if pd.isna(row['ef_level'])
         else row['ef_level'],
         axis=1,
     )
-    df['text'] = (
+    # Tower A — context + student response
+    df['text_a'] = (
         "Prompt Level: " + df['ef_level'].astype(str)
-        + " Prompt: "     + df['activity_instructions']
-        + " Response: "   + df['student_submission']
-        + " Correction: " + df['correction']
+        + " Prompt: "    + df['activity_instructions'].astype(str)
+        + " Response: "  + df['student_submission'].astype(str)
     )
-    keep = ["orig_idx", "text", "task_id", "ef_level",
+    # Tower B — expert correction only
+    df['text_b'] = df['correction'].astype(str)
+
+    keep = ["orig_idx", "text_a", "text_b", "task_id", "ef_level",
             "majority_value", "agreement_percentage"]
     df = df[keep].rename(columns={'majority_value': 'label'})
-    df.dropna(subset=['label', 'text'], inplace=True)
+    df.dropna(subset=['label', 'text_a', 'text_b'], inplace=True)
     df.reset_index(drop=True, inplace=True)
     return df
 
 
 def _cast_labels(ds: Dataset) -> Dataset:
-    """Cast 'label' column to ClassLabel so stratified splits work."""
-    feats = ds.features.copy()
+    feats          = ds.features.copy()
     feats["label"] = ClassLabel(names=[str(i) for i in range(NUM_LABELS)])
     return ds.cast(feats)
 
 
-
 def load_jsonl_as_dataset(path: str) -> Dataset:
-    """Remplacement de Dataset.from_json() qui bug sur filesystem local."""
     records = []
     with open(path, 'r', encoding='utf-8') as f:
         for line in f:
             records.append(json.loads(line.strip()))
     return Dataset.from_pandas(pd.DataFrame(records))
 
+
 # ============================================================
-# FIXED EVAL SETS  ← built ONCE from agreement = 100 %
+# TOKENIZATION  — independent budget per tower
+# ============================================================
+def tokenize_ds(ds: Dataset, tokenizer, max_length: int) -> Dataset:
+    """
+    Each tower is tokenised separately up to max_length.
+    Tower A uses truncation='only_first' on the combined string
+    (level+prompt+response) to never cut the correction.
+    """
+    def _tokenize(examples):
+        enc_a = tokenizer(
+            examples["text_a"],
+            truncation=True,
+            padding="max_length",
+            max_length=max_length,
+        )
+        enc_b = tokenizer(
+            examples["text_b"],
+            truncation=True,
+            padding="max_length",
+            max_length=max_length,
+        )
+        return {
+            "input_ids_a":      enc_a["input_ids"],
+            "attention_mask_a": enc_a["attention_mask"],
+            "input_ids_b":      enc_b["input_ids"],
+            "attention_mask_b": enc_b["attention_mask"],
+        }
+    return ds.map(_tokenize, batched=True)
+
+
+# ============================================================
+# FIXED EVAL SETS  ← built ONCE
 # ============================================================
 def build_fixed_eval_sets(csv_path: str, tokenizer, force_rebuild: bool = False):
     os.makedirs(FIXED_EVAL_DIR, exist_ok=True)
@@ -134,27 +254,31 @@ def build_fixed_eval_sets(csv_path: str, tokenizer, force_rebuild: bool = False)
         return val_ds, test_ds, set(meta["eval_orig_indices"]), meta["max_length"]
 
     print("Building fixed eval sets …")
-    df_raw = pd.read_csv(csv_path)
+    df_raw             = pd.read_csv(csv_path)
     df_raw['orig_idx'] = df_raw.index
-
-    df = preprocess_df(df_raw)
+    df                 = preprocess_df(df_raw)
     df["agreement_percentage"] = pd.to_numeric(
         df["agreement_percentage"], errors='coerce'
     )
 
-    # ── max_length depuis le pool le plus large ────────────────────────────
+    # ── max_length: use the longer of the two towers at p95 ───────────────
     print("  Computing max_length from agreement>=60% pool …")
-    df_pool = df[df["agreement_percentage"] >= 60]
-    lengths  = tokenizer(
-        df_pool['text'].tolist(),
-        truncation=False, padding=False, return_length=True
+    df_pool   = df[df["agreement_percentage"] >= 60]
+    lengths_a = tokenizer(
+        df_pool['text_a'].tolist(),
+        truncation=False, padding=False, return_length=True,
     )["length"]
-    p95        = int(np.percentile(lengths, 95))
-    max_length = min(max(p95, 128), 512)
-    print(f"  token length — median={int(np.median(lengths))}, "
-          f"95th={p95}, chosen max_length={max_length}")
+    lengths_b = tokenizer(
+        df_pool['text_b'].tolist(),
+        truncation=False, padding=False, return_length=True,
+    )["length"]
+    p95_a      = int(np.percentile(lengths_a, 95))
+    p95_b      = int(np.percentile(lengths_b, 95))
+    max_length = min(max(max(p95_a, p95_b), 128), 512)
+    print(f"  text_a — median={int(np.median(lengths_a))}, 95th={p95_a}")
+    print(f"  text_b — median={int(np.median(lengths_b))}, 95th={p95_b}")
+    print(f"  chosen max_length={max_length} (applied to each tower independently)")
 
-    # ── isoler les deux pools ──────────────────────────────────────────────
     df_100   = df[df["agreement_percentage"] == 100].copy()
     df_60_80 = df[
         (df["agreement_percentage"] >= 60) &
@@ -164,35 +288,21 @@ def build_fixed_eval_sets(csv_path: str, tokenizer, force_rebuild: bool = False)
     print(f"\n  Pool agreement=100%    : {len(df_100)} samples")
     print(f"  Pool agreement 60-80%  : {len(df_60_80)} samples")
 
-    # ── tirage stratifié depuis chaque pool ───────────────────────────────
-    # Objectif : val ~N samples  (60% de 100%, 40% de 60-80%)
-    # On prend 15% de chaque pool puis on compose le mix
-    EVAL_RATIO = 0.15   # part de chaque pool réservée à val+test
+    EVAL_RATIO = 0.15
 
-    def stratified_sample(df_in: pd.DataFrame, ratio: float, seed: int) -> pd.DataFrame:
-        """Tirage stratifié par label."""
+    def stratified_sample(df_in, ratio, seed):
         return (
             df_in.groupby('label', group_keys=False)
-                 .apply(lambda x: x.sample(
-                     max(1, int(len(x) * ratio)),
-                     random_state=seed
-                 ))
+                 .apply(lambda x: x.sample(max(1, int(len(x) * ratio)),
+                                            random_state=seed))
         )
 
     sample_100   = stratified_sample(df_100,   EVAL_RATIO, seed=42)
     sample_60_80 = stratified_sample(df_60_80, EVAL_RATIO, seed=42)
 
-    print(f"\n  Tirage éval depuis 100%    : {len(sample_100)} samples")
-    print(f"  Tirage éval depuis 60-80%  : {len(sample_60_80)} samples")
-
-    # ── composition du mix 60% / 40% ──────────────────────────────────────
-    n_total    = len(sample_100) + len(sample_60_80)
-    n_from_100 = int(n_total * 0.60)
-    n_from_noisy = n_total - n_from_100
-
-    # Ajuste si pas assez de samples dans un pool
-    n_from_100   = min(n_from_100,   len(sample_100))
-    n_from_noisy = min(n_from_noisy, len(sample_60_80))
+    n_total      = len(sample_100) + len(sample_60_80)
+    n_from_100   = min(int(n_total * 0.60), len(sample_100))
+    n_from_noisy = min(n_total - n_from_100, len(sample_60_80))
 
     final_100   = sample_100.sample(n=n_from_100,   random_state=42)
     final_noisy = sample_60_80.sample(n=n_from_noisy, random_state=42)
@@ -208,15 +318,13 @@ def build_fixed_eval_sets(csv_path: str, tokenizer, force_rebuild: bool = False)
     print("\n  Label distribution eval pool:")
     print(df_eval['label'].value_counts().sort_index())
 
-    # ── split val / test (50/50 stratifié) ────────────────────────────────
     ds_eval = _cast_labels(
         Dataset.from_pandas(
-            df_eval[["orig_idx", "text", "task_id", "ef_level",
+            df_eval[["orig_idx", "text_a", "text_b", "task_id", "ef_level",
                       "label", "is_100_agreement"]],
             preserve_index=False,
         )
     )
-
     split   = ds_eval.train_test_split(
         test_size=0.50, seed=42, stratify_by_column="label"
     )
@@ -232,17 +340,16 @@ def build_fixed_eval_sets(csv_path: str, tokenizer, force_rebuild: bool = False)
           f"(100%: {sum(test_ds['is_100_agreement'])}, "
           f"noisy: {sum(not x for x in test_ds['is_100_agreement'])})")
 
-    # persist
     save_split_to_jsonl(val_ds,  val_path)
     save_split_to_jsonl(test_ds, test_path)
 
     meta = {
-        "eval_orig_indices": list(eval_orig_indices),
-        "max_length":        max_length,
-        "n_val":             len(val_ds),
-        "n_test":            len(test_ds),
-        "mix_100_pct":       60,
-        "mix_noisy_pct":     40,
+        "eval_orig_indices":     list(eval_orig_indices),
+        "max_length":            max_length,
+        "n_val":                 len(val_ds),
+        "n_test":                len(test_ds),
+        "mix_100_pct":           60,
+        "mix_noisy_pct":         40,
         "agreement_noisy_range": "60-80",
     }
     with open(meta_path, 'w') as f:
@@ -251,8 +358,9 @@ def build_fixed_eval_sets(csv_path: str, tokenizer, force_rebuild: bool = False)
     print(f"\n  Saved → {FIXED_EVAL_DIR}/")
     return val_ds, test_ds, eval_orig_indices, max_length
 
+
 # ============================================================
-# TRAINING SET BUILDER  (one per experiment)
+# TRAINING SET BUILDER  — with combined sample weights
 # ============================================================
 def prepare_train_set(
     csv_path: str,
@@ -260,56 +368,56 @@ def prepare_train_set(
     agreement_threshold: int,
     experiment_dir: str,
 ) -> Dataset:
-    df_raw = pd.read_csv(csv_path)
+    df_raw             = pd.read_csv(csv_path)
     df_raw['orig_idx'] = df_raw.index
+    df                 = preprocess_df(df_raw)
 
-    print(f"\n[DEBUG] df_raw shape: {df_raw.shape}")
-    print(f"[DEBUG] columns: {df_raw.columns.tolist()}")
-    print(f"[DEBUG] agreement_percentage dtype: {df_raw['agreement_percentage'].dtype}")
-    print(f"[DEBUG] agreement_percentage sample values: {df_raw['agreement_percentage'].dropna().unique()[:10]}")
-    print(f"[DEBUG] agreement_percentage NaN count: {df_raw['agreement_percentage'].isna().sum()}")
-
-    df = preprocess_df(df_raw)
-    print(f"[DEBUG] after preprocess_df shape: {df.shape}")
-
-    # ── filtre par threshold ──────────────────────────────────────────────
-    # cast explicite pour éviter les bugs de dtype (string vs float)
     df["agreement_percentage"] = pd.to_numeric(
         df["agreement_percentage"], errors='coerce'
     )
     df_thresh = df[df["agreement_percentage"] >= agreement_threshold]
-    print(f"[DEBUG] after agreement>={agreement_threshold}% filter: {len(df_thresh)} rows")
-
-    # ── exclusion des eval rows ───────────────────────────────────────────
-    print(f"[DEBUG] eval_orig_indices size: {len(eval_orig_indices)}")
-    print(f"[DEBUG] sample eval_orig_indices: {list(eval_orig_indices)[:5]}")
-    print(f"[DEBUG] sample df orig_idx: {df_thresh['orig_idx'].head().tolist()}")
-
-    df_train = df_thresh[~df_thresh['orig_idx'].isin(eval_orig_indices)].copy()
-    print(f"[DEBUG] after eval exclusion: {len(df_train)} rows")
-
+    df_train  = df_thresh[~df_thresh['orig_idx'].isin(eval_orig_indices)].copy()
     df_train.reset_index(drop=True, inplace=True)
+
+    if len(df_train) == 0:
+        raise ValueError(f"Train set is empty for threshold={agreement_threshold}%.")
+
+    # ── Agreement weight  (continuous, not binary) ────────────────────────
+    df_train["agreement_weight"] = df_train["agreement_percentage"] / 100.0
+
+    # ── Class weight  (inverse frequency) ────────────────────────────────
+    label_counts = df_train["label"].value_counts()
+    total        = len(df_train)
+    cw_map       = {
+        cls: total / (NUM_LABELS * cnt)
+        for cls, cnt in label_counts.items()
+    }
+    df_train["class_weight"] = df_train["label"].map(cw_map)
+
+    # ── Combined weight, normalised so mean = 1.0 ─────────────────────────
+    df_train["sample_weight"]  = (
+        df_train["agreement_weight"] * df_train["class_weight"]
+    )
+    df_train["sample_weight"] /= df_train["sample_weight"].mean()
 
     print(f"\n[Train | agreement>={agreement_threshold}%]  n_samples={len(df_train)}")
     print("Label distribution:")
     print(df_train['label'].value_counts().sort_index())
-
-    if len(df_train) == 0:
-        raise ValueError(
-            f"Train set is empty for threshold={agreement_threshold}%. "
-            f"Vérifier les colonnes et valeurs de agreement_percentage."
-        )
+    print(f"Sample weight — min={df_train['sample_weight'].min():.3f}, "
+          f"max={df_train['sample_weight'].max():.3f}, "
+          f"mean={df_train['sample_weight'].mean():.3f}")
 
     ds = _cast_labels(
         Dataset.from_pandas(
-            df_train[["orig_idx", "text", "task_id", "ef_level", "label"]],
+            df_train[["orig_idx", "text_a", "text_b", "task_id",
+                       "ef_level", "label", "sample_weight"]],
             preserve_index=False,
         )
     )
-
     os.makedirs(experiment_dir, exist_ok=True)
     save_split_to_jsonl(ds, os.path.join(experiment_dir, "train.jsonl"))
     return ds
+
 
 # ============================================================
 # HELPERS
@@ -320,35 +428,20 @@ def save_split_to_jsonl(dataset_split, filename):
             f.write(json.dumps(record, ensure_ascii=False) + '\n')
 
 
-def tokenize_ds(ds: Dataset, tokenizer, max_length: int) -> Dataset:
-    return ds.map(
-        lambda ex: tokenizer(
-            ex["text"],
-            padding="max_length",
-            truncation=True,
-            max_length=max_length,
-        ),
-        batched=True,
-    )
-
-
 # ============================================================
 # METRICS  (unchanged)
 # ============================================================
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
-    predictions = np.argmax(logits, axis=-1)
-
+    predictions    = np.argmax(logits, axis=-1)
     metrics = {
-        "accuracy":              float('nan'),
-        "precision":             float('nan'),
-        "recall":                float('nan'),
-        "f1":                    float('nan'),
-        "cohen_kappa":           float('nan'),
-        "pearson_corr":          float('nan'),
-        "classification_report": {},
+        "accuracy":     float('nan'),
+        "precision":    float('nan'),
+        "recall":       float('nan'),
+        "f1":           float('nan'),
+        "cohen_kappa":  float('nan'),
+        "pearson_corr": float('nan'),
     }
-
     try:
         if len(labels) >= 2 and len(set(labels)) > 1 and len(set(predictions)) > 1:
             metrics["accuracy"] = accuracy_score(labels, predictions)
@@ -361,12 +454,8 @@ def compute_metrics(eval_pred):
                 labels, predictions, weights="quadratic"
             )
             metrics["pearson_corr"], _ = pearsonr(labels, predictions)
-            metrics["classification_report"] = classification_report(
-                labels, predictions, output_dict=True, zero_division=0
-            )
     except Exception as e:
         print(f"[!] Error in compute_metrics: {e}")
-
     return metrics
 
 
@@ -388,12 +477,12 @@ def safe_metrics(ref_labels, predicted_labels):
         print(f"[!] Cohen Kappa: {e}")
     try:
         result["pearson"], _ = pearsonr(ref_labels, predicted_labels)
-        result["pearson"] = round(result["pearson"], 4)
+        result["pearson"]    = round(result["pearson"], 4)
     except Exception as e:
         print(f"[!] Pearson: {e}")
     try:
         result["accuracy"] = round(accuracy_score(ref_labels, predicted_labels), 4)
-        p, r, f, _ = precision_recall_fscore_support(
+        p, r, f, _         = precision_recall_fscore_support(
             ref_labels, predicted_labels, average="weighted", zero_division=0
         )
         result["precision"] = round(p, 4)
@@ -405,12 +494,13 @@ def safe_metrics(ref_labels, predicted_labels):
 
 
 # ============================================================
-# TRAINING  (unchanged)
+# TRAINING
 # ============================================================
 def train_model(tokenized_train, tokenized_test, num_labels, output_dir, tokenizer):
-    model = RobertaForSequenceClassification.from_pretrained(
-        "FacebookAI/roberta-large",
+    model = TwoTowerRoberta(
+        model_name="FacebookAI/roberta-large",
         num_labels=num_labels,
+        dropout=0.1,
     )
 
     training_args = TrainingArguments(
@@ -423,9 +513,9 @@ def train_model(tokenized_train, tokenized_test, num_labels, output_dir, tokeniz
         learning_rate=2e-5,
         warmup_ratio=0.1,
         lr_scheduler_type="cosine",
-        per_device_train_batch_size=8,
-        gradient_accumulation_steps=4,
-        per_device_eval_batch_size=16,
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=16,
+        per_device_eval_batch_size=4,
         num_train_epochs=4,
         weight_decay=0.01,
         load_best_model_at_end=True,
@@ -433,14 +523,16 @@ def train_model(tokenized_train, tokenized_test, num_labels, output_dir, tokeniz
         greater_is_better=True,
         logging_steps=100,
         fp16=torch.cuda.is_available(),
+        remove_unused_columns=False,   # required for custom model + collator
     )
 
     trainer = OrdinalTrainer(
         model=model,
         args=training_args,
         train_dataset=tokenized_train,
-        eval_dataset=tokenized_test,   # fixed test set used for early stopping
+        eval_dataset=tokenized_test,
         compute_metrics=compute_metrics,
+        data_collator=TwoTowerDataCollator(),
         sigma=1.0,
     )
 
@@ -450,22 +542,23 @@ def train_model(tokenized_train, tokenized_test, num_labels, output_dir, tokeniz
     best_model_path = trainer.state.best_model_checkpoint
     print(f"Best model checkpoint: {best_model_path}")
 
-    trainer.save_model(best_model_path)
-    model.save_pretrained(best_model_path, from_pt=True)
-    tokenizer.save_pretrained(best_model_path)
+    # Save state dict + tokenizer for later reload
+    if best_model_path:
+        os.makedirs(best_model_path, exist_ok=True)
+        torch.save(
+            trainer.model.state_dict(),
+            os.path.join(best_model_path, "pytorch_model.bin"),
+        )
+        tokenizer.save_pretrained(best_model_path)
+        trainer.model.encoder.config.save_pretrained(best_model_path)
 
     return trainer, eval_results
 
 
 # ============================================================
-# DETAILED EVALUATION  — now scoped per experiment
+# DETAILED EVALUATION  — identical structure to original
 # ============================================================
 def detailed_evaluation(trainer, tokenized_valid, experiment_name: str = "experiment"):
-    """
-    Identical analysis as before but:
-      - output files written to  results/{experiment_name}/
-      - returns a summary dict for side-by-side comparison
-    """
     out_dir = f"results/{experiment_name}"
     os.makedirs(out_dir, exist_ok=True)
 
@@ -483,21 +576,18 @@ def detailed_evaluation(trainer, tokenized_valid, experiment_name: str = "experi
 
     print("\n📊 Classification Report:")
     print(classification_report(
-        global_refs, global_predicted,
-        target_names=LABEL_NAMES, zero_division=0
+        global_refs, global_predicted, target_names=LABEL_NAMES, zero_division=0
     ))
 
-    global_acc     = accuracy_score(global_refs, global_predicted)
-    global_qwk     = cohen_kappa_score(global_refs, global_predicted, weights="quadratic")
-    global_lwk     = cohen_kappa_score(global_refs, global_predicted, weights="linear")
+    global_acc        = accuracy_score(global_refs, global_predicted)
+    global_qwk        = cohen_kappa_score(global_refs, global_predicted, weights="quadratic")
+    global_lwk        = cohen_kappa_score(global_refs, global_predicted, weights="linear")
     global_pearson, _ = pearsonr(global_refs, global_predicted)
     print(f"✅ Accuracy:        {global_acc:.4f}")
     print(f"✅ QWK (quadratic): {global_qwk:.4f}")
     print(f"✅ LWK (linear):    {global_lwk:.4f}")
     print(f"✅ Pearson:         {global_pearson:.4f}")
 
-
-    # ── Métrique sur agreement=100% uniquement ────────────────────────────────
     if "is_100_agreement" in tokenized_valid.column_names:
         mask_100 = np.array(tokenized_valid["is_100_agreement"])
         if mask_100.sum() >= 2:
@@ -511,13 +601,13 @@ def detailed_evaluation(trainer, tokenized_valid, experiment_name: str = "experi
 
     # ── 2. CONFUSION MATRIX ───────────────────────────────────────────────────
     from sklearn.metrics import confusion_matrix
-    cm     = confusion_matrix(global_refs, global_predicted)
-    cm_df  = pd.DataFrame(cm, index=LABEL_NAMES, columns=LABEL_NAMES)
+    cm        = confusion_matrix(global_refs, global_predicted)
+    cm_df     = pd.DataFrame(cm, index=LABEL_NAMES, columns=LABEL_NAMES)
     print("\n📊 Confusion Matrix:")
     print(cm_df.to_string())
     cm_df.to_csv(f"{out_dir}/confusion_matrix.csv")
 
-    cm_norm = cm.astype('float') / cm.sum(axis=1, keepdims=True)
+    cm_norm    = cm.astype('float') / cm.sum(axis=1, keepdims=True)
     cm_norm_df = pd.DataFrame(
         np.round(cm_norm, 3), index=LABEL_NAMES, columns=LABEL_NAMES
     )
@@ -554,19 +644,18 @@ def detailed_evaluation(trainer, tokenized_valid, experiment_name: str = "experi
         mask = global_refs == cls_idx
         if mask.sum() == 0:
             continue
-        cls_preds  = global_predicted[mask]
-        cls_refs   = global_refs[mask]
-        n_total    = len(cls_refs)
-        cls_acc    = (cls_preds == cls_refs).sum() / n_total
-        cls_adj    = (np.abs(cls_preds.astype(int) - cls_refs.astype(int)) <= 1).mean()
-        cls_mae    = np.abs(cls_preds.astype(int)  - cls_refs.astype(int)).mean()
-        wrong_mask = cls_preds != cls_refs
+        cls_preds    = global_predicted[mask]
+        cls_refs     = global_refs[mask]
+        n_total      = len(cls_refs)
+        cls_acc      = (cls_preds == cls_refs).sum() / n_total
+        cls_adj      = (np.abs(cls_preds.astype(int) - cls_refs.astype(int)) <= 1).mean()
+        cls_mae      = np.abs(cls_preds.astype(int)  - cls_refs.astype(int)).mean()
+        wrong_mask   = cls_preds != cls_refs
         top_conf_str = (
             ", ".join([
                 f"{LABEL_NAMES[p]}({c})"
                 for p, c in Counter(cls_preds[wrong_mask]).most_common(3)
-            ])
-            if wrong_mask.sum() > 0 else "None"
+            ]) if wrong_mask.sum() > 0 else "None"
         )
         per_class_results.append({
             "class": cls_name, "n_samples": n_total,
@@ -596,8 +685,8 @@ def detailed_evaluation(trainer, tokenized_valid, experiment_name: str = "experi
         results_levels.append({
             "ef_level": lv, **m,
             "adjacent_acc": round(adj, 4),
-            "mae": round(mae_, 4),
-            "n_samples": len(sub_ds),
+            "mae":          round(mae_, 4),
+            "n_samples":    len(sub_ds),
         })
         print(f"  Level {lv:>2} | n={len(sub_ds):>4} | acc={m['accuracy']:.3f} | "
               f"qwk={m['ck']:.3f} | adj={adj:.3f} | mae={mae_:.3f}")
@@ -621,7 +710,7 @@ def detailed_evaluation(trainer, tokenized_valid, experiment_name: str = "experi
         results_tasks.append({
             "task_id": t, "ef_level": sub_ds["ef_level"][0], **m,
             "adjacent_acc": round(adj, 4), "mae": round(mae_, 4),
-            "n_samples": len(sub_ds),
+            "n_samples":    len(sub_ds),
         })
     df_tasks = pd.DataFrame(results_tasks).sort_values("ck", ascending=True)
     df_tasks.to_csv(f"{out_dir}/eval_by_task.csv", index=False)
@@ -639,7 +728,8 @@ def detailed_evaluation(trainer, tokenized_valid, experiment_name: str = "experi
         torch.tensor(global_preds.predictions), dim=-1
     ).numpy()
     val_df = pd.DataFrame({
-        "text":            tokenized_valid["text"],
+        "text_a":          tokenized_valid["text_a"],
+        "text_b":          tokenized_valid["text_b"],
         "task_id":         tokenized_valid["task_id"],
         "ef_level":        tokenized_valid["ef_level"],
         "true_label":      global_refs,
@@ -676,11 +766,11 @@ def detailed_evaluation(trainer, tokenized_valid, experiment_name: str = "experi
 
     return {
         "experiment":   experiment_name,
-        "accuracy":     round(global_acc,    4),
-        "qwk":          round(global_qwk,    4),
-        "lwk":          round(global_lwk,    4),
-        "pearson":      round(global_pearson, 4),
-        "adjacent_acc": round(global_adj_acc, 4),
+        "accuracy":     round(global_acc,     4),
+        "qwk":          round(global_qwk,     4),
+        "lwk":          round(global_lwk,     4),
+        "pearson":      round(global_pearson,  4),
+        "adjacent_acc": round(global_adj_acc,  4),
         "mae":          round(float(global_mae), 4),
         "n_samples":    len(global_refs),
         "n_errors":     int(errors.sum()),
@@ -690,16 +780,17 @@ def detailed_evaluation(trainer, tokenized_valid, experiment_name: str = "experi
 # ============================================================
 # S3 UPLOAD  (unchanged)
 # ============================================================
+'''
 def upload_model_to_s3(local_dir, bucket_name, s3_prefix):
     s3 = boto3.client('s3')
     for root, dirs, files in os.walk(local_dir):
         for file in files:
             local_path = os.path.join(root, file)
             relative   = os.path.relpath(local_path, local_dir)
-            s3_path    = os.path.join(s3_prefix, relative).replace("\\", "/")
+            s3_path    = os.path.join(s3_prefix, relative).replace("\", "/")
             print(f"Uploading {local_path} → s3://{bucket_name}/{s3_path}")
             s3.upload_file(local_path, bucket_name, s3_path)
-
+'''
 
 # ============================================================
 # MAIN
@@ -708,8 +799,6 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained("FacebookAI/roberta-large")
 
     # ── Step 1 : build / reload fixed eval sets ONCE ──────────────────────────
-    # val  → detailed evaluation   (agreement = 100%, never seen during training)
-    # test → early-stopping signal during training (agreement = 100%)
     val_ds, test_ds, eval_orig_indices, max_length = build_fixed_eval_sets(
         CSV_PATH, tokenizer, force_rebuild=True
     )
@@ -719,44 +808,39 @@ def main():
     tokenized_test  = tokenize_ds(test_ds,  tokenizer, max_length)
     tokenized_valid = tokenize_ds(val_ds,   tokenizer, max_length)
 
+    AGREEMENT_THRESHOLD = 60   # use all data, penalise low-agreement via weights
 
-    AGREEMENT_THRESHOLD = 100   # 60  ou  100
-
-    # ── Step 3 : run experiments ───────────────────────────────────────────────
     experiments = [
-    {"agreement_threshold": AGREEMENT_THRESHOLD,
-     "name": f"agreement_{'gte60' if AGREEMENT_THRESHOLD == 60 else 'eq100'}"},
+        {"agreement_threshold": AGREEMENT_THRESHOLD,
+         "name": f"two_tower_gte{AGREEMENT_THRESHOLD}"},
     ]
 
     os.makedirs("results", exist_ok=True)
     comparison = []
 
     for exp in experiments:
-        threshold = exp["agreement_threshold"]
-        exp_name  = exp["name"]
-        output_dir   = f"model_saved/roberta-large-ft-{exp_name}"
+        threshold    = exp["agreement_threshold"]
+        exp_name     = exp["name"]
+        output_dir   = f"model_saved/roberta-large-two-tower-{exp_name}"
         exp_data_dir = f"data_v2/{exp_name}"
 
         print(f"\n{'='*80}")
         print(f"EXPERIMENT : {exp_name}  (agreement >= {threshold}%)")
         print('='*80)
 
-        # build train — eval rows are excluded regardless of threshold
         train_ds = prepare_train_set(
             CSV_PATH, eval_orig_indices, threshold, exp_data_dir
         )
 
-        print(f"Tokenizing train set …")
+        print("Tokenizing train set …")
         tokenized_train = tokenize_ds(train_ds, tokenizer, max_length)
 
-        # train — both experiments evaluate on the SAME fixed test set
         trainer, eval_results = train_model(
             tokenized_train, tokenized_test, NUM_LABELS, output_dir, tokenizer
         )
-        print(f"\n[{exp_name}] Test-set eval results (used for early stopping):")
+        print(f"\n[{exp_name}] Test-set eval results (early-stopping signal):")
         print(eval_results)
 
-        # detailed evaluation — SAME fixed validation set for both
         summary = detailed_evaluation(
             trainer, tokenized_valid, experiment_name=exp_name
         )
@@ -764,10 +848,10 @@ def main():
 
     # ── Step 4 : side-by-side comparison ──────────────────────────────────────
     print("\n" + "=" * 80)
-    print("SIDE-BY-SIDE COMPARISON  (identical val set for both experiments)")
+    print("SIDE-BY-SIDE COMPARISON  (identical val set for all experiments)")
     print("=" * 80)
     df_cmp = pd.DataFrame(comparison).set_index("experiment")
-    print(df_cmp.T.to_string())          # metrics as rows, experiments as cols
+    print(df_cmp.T.to_string())
     df_cmp.to_csv("results/comparison_summary.csv")
     print("\nSaved → results/comparison_summary.csv")
 

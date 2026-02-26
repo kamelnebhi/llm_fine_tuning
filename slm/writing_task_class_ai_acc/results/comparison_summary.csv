@@ -1,2 +1,2 @@
-experiment,accuracy,qwk,lwk,pearson,adjacent_acc,mae,n_samples,n_errors
-agreement_eq100,0.7363,0.91,0.815,0.91,0.9857,0.2827,421,111
+experiment,accuracy_accuracy,accuracy_qwk,accuracy_lwk,accuracy_pearson,accuracy_adjacent_acc,accuracy_mae,coherence_accuracy,coherence_qwk,coherence_lwk,coherence_pearson,coherence_adjacent_acc,coherence_mae,range_accuracy,range_qwk,range_lwk,range_pearson,range_adjacent_acc,range_mae
+multitask_cross_encoder_gte60,0.747,0.9404,0.8521,0.941,0.9788,0.2827,0.472,0.8552,0.6704,0.8566,0.91,0.6299,0.4567,0.8556,0.6634,0.8564,0.9194,0.6341
