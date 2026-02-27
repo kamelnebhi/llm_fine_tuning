@@ -28,7 +28,7 @@ import boto3
 region_name    = 'us-east-1'
 profile_name   = 'lsd-sandbox'
 bucket_name    = 'sagemaker-studio-oxs6vznjds'
-CSV_PATH       = "data_v2/sample_data_acc_gec.csv"
+CSV_PATH       = "data_v2/merged_accuracy_coherence_range_final.csv"
 FIXED_EVAL_DIR = "data_v2/fixed_eval"
 NUM_LABELS     = 6
 TASK_NAMES     = ["accuracy", "coherence", "range"]
@@ -95,32 +95,32 @@ class MultiTaskCrossEncoderRoberta(nn.Module):
 
         return SequenceClassifierOutput(loss=None, logits=logits)
 
-
 # ============================================================
 # DATA COLLATOR
 # ============================================================
 class MultiTaskDataCollator:
-    """
-    - Tokenizer fields : input_ids, attention_mask
-    - Stacks label_accuracy / label_coherence / label_range
-      into a single labels tensor of shape [batch, 3]
-    - sample_weight is optional (absent in eval sets)
-    """
-    TENSOR_FIELDS = ["input_ids", "attention_mask", "sample_weight"]
+    WEIGHT_FIELDS = ["sample_weight_accuracy",
+                     "sample_weight_coherence",
+                     "sample_weight_range"]
     LABEL_FIELDS  = ["label_accuracy", "label_coherence", "label_range"]
 
     def __call__(self, features):
         batch = {}
 
-        for field in self.TENSOR_FIELDS:
-            if field not in features[0]:
-                continue
-            dtype = torch.float32 if field == "sample_weight" else torch.long
+        # input ids & attention mask
+        for field in ["input_ids", "attention_mask"]:
             batch[field] = torch.tensor(
-                [f[field] for f in features], dtype=dtype
+                [f[field] for f in features], dtype=torch.long
             )
 
-        # Stack 3 labels → [batch, 3]
+        # un poids par tâche (absent en eval → ignoré)
+        for field in self.WEIGHT_FIELDS:
+            if field in features[0]:
+                batch[field] = torch.tensor(
+                    [f[field] for f in features], dtype=torch.float32
+                )
+
+        # labels [batch, 3]
         batch["labels"] = torch.tensor(
             [[f[lf] for lf in self.LABEL_FIELDS] for f in features],
             dtype=torch.long,
@@ -132,19 +132,23 @@ class MultiTaskDataCollator:
 # MULTITASK ORDINAL TRAINER
 # ============================================================
 class MultiTaskOrdinalTrainer(Trainer):
-    def __init__(self, *args, sigma=1.0, task_weights=None, **kwargs):
+    def __init__(self, *args, sigma=None, task_weights=None, **kwargs):
         super().__init__(*args, **kwargs)
+        # sigma : float partagé OU liste [sigma_acc, sigma_coh, sigma_range]
+        if sigma is None:
+            sigma = [1.0, 1.5, 1.2]          # défaut recommandé
+        elif isinstance(sigma, float):
+            sigma = [sigma, sigma, sigma]
         self.sigma        = sigma
-        self.task_weights = task_weights or [1.0, 1.0, 1.0]   # wa, wc, wr
+        self.task_weights = task_weights or [1.0, 1.5, 1.5]
 
-    def _ordinal_loss(self, logits, labels, sample_weights=None):
-        """Gaussian soft-label ordinal loss for a single task."""
+    def _ordinal_loss(self, logits, labels, sample_weights=None, sigma=1.0):
         device  = logits.device
         classes = torch.arange(logits.shape[-1], device=device).float()
 
         soft_labels = torch.exp(
             -((classes.unsqueeze(0) - labels.unsqueeze(1).float()) ** 2)
-            / (2 * self.sigma ** 2)
+            / (2 * sigma ** 2)
         )
         soft_labels     = soft_labels / soft_labels.sum(dim=-1, keepdim=True)
         log_probs       = torch.log_softmax(logits, dim=-1)
@@ -155,52 +159,32 @@ class MultiTaskOrdinalTrainer(Trainer):
         return per_sample_loss.mean()
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        labels         = inputs.pop("labels")            # [batch, 3]
-        sample_weights = inputs.pop("sample_weight", None)
-        outputs        = model(**inputs)
-        logits         = outputs.logits                  # [batch, 18]
+        labels = inputs.pop("labels")
 
-        device = logits.device
-        sw     = sample_weights.to(device) if sample_weights is not None else None
+        # récupérer les 3 poids (None en eval)
+        sw_a = inputs.pop("sample_weight_accuracy",  None)
+        sw_c = inputs.pop("sample_weight_coherence", None)
+        sw_r = inputs.pop("sample_weight_range",     None)
 
-        # Split logits per task
-        logits_a = logits[:, :NUM_LABELS]
-        logits_c = logits[:, NUM_LABELS:2*NUM_LABELS]
-        logits_r = logits[:, 2*NUM_LABELS:]
+        outputs = model(**inputs)
+        logits  = outputs.logits
+        device  = logits.device
 
-        # Split labels per task
-        labels_a = labels[:, 0]
-        labels_c = labels[:, 1]
-        labels_r = labels[:, 2]
+        sw_a = sw_a.to(device) if sw_a is not None else None
+        sw_c = sw_c.to(device) if sw_c is not None else None
+        sw_r = sw_r.to(device) if sw_r is not None else None
 
-        loss_a = self._ordinal_loss(logits_a, labels_a, sw)
-        loss_c = self._ordinal_loss(logits_c, labels_c, sw)
-        loss_r = self._ordinal_loss(logits_r, labels_r, sw)
+        loss_a = self._ordinal_loss(logits[:, :NUM_LABELS],
+                                    labels[:, 0], sw_a, sigma=self.sigma[0])
+        loss_c = self._ordinal_loss(logits[:, NUM_LABELS:2*NUM_LABELS],
+                                    labels[:, 1], sw_c, sigma=self.sigma[1])
+        loss_r = self._ordinal_loss(logits[:, 2*NUM_LABELS:],
+                                    labels[:, 2], sw_r, sigma=self.sigma[2])
 
         wa, wc, wr = self.task_weights
         loss = wa * loss_a + wc * loss_c + wr * loss_r
 
         return (loss, outputs) if return_outputs else loss
-
-    def _save_model(self, output_dir, state_dict=None):
-        os.makedirs(output_dir, exist_ok=True)
-        if state_dict is None:
-            state_dict = self.model.state_dict()
-        torch.save(state_dict, os.path.join(output_dir, "pytorch_model.bin"))
-
-    def _load_best_model(self):
-        best_ckpt = self.state.best_model_checkpoint
-        if best_ckpt is None:
-            print("[!] No best checkpoint found — keeping current weights.")
-            return
-        model_path = os.path.join(best_ckpt, "pytorch_model.bin")
-        if not os.path.exists(model_path):
-            print(f"[!] pytorch_model.bin not found at {best_ckpt}")
-            return
-        print(f"↩  Reloading best model from {model_path}")
-        state_dict = torch.load(model_path, map_location="cpu")
-        self.model.load_state_dict(state_dict)
-        self.model.to(self.args.device)
 
 
 # ============================================================
@@ -221,13 +205,23 @@ def preprocess_df(df_raw: pd.DataFrame) -> pd.DataFrame:
     df['text_b'] = df['correction'].astype(str)
 
     keep = ["orig_idx", "text_a", "text_b", "task_id", "ef_level",
-            "majority_value", "agreement_percentage"]
-    df = df[keep].rename(columns={'majority_value': 'label_accuracy'})
-    df.dropna(subset=['label_accuracy', 'text_a', 'text_b'], inplace=True)
+            "majority_value_accuracy", "agreement_percentage_accuracy", 
+            "majority_value_coherence", "agreement_percentage_coherence",
+            "majority_value_range", "agreement_percentage_range"
+            ]
+    df = df[keep].rename(columns={
+        'majority_value_accuracy': 'label_accuracy',
+        'majority_value_coherence': 'label_coherence',
+        'majority_value_range': 'label_range'
+        })
+    df.dropna(subset=['label_accuracy', 'label_coherence', 'label_range', 'text_a', 'text_b'], inplace=True)
+    for col in ["label_accuracy", "label_coherence", "label_range"]:
+        df[col] = df[col].round().astype("int64")
     df.reset_index(drop=True, inplace=True)
 
     # ── Synthetic labels : label_accuracy ± random {-1, 0, +1} ──────────
     # Replace this block once real coherence/range annotations are available
+    '''
     rng     = np.random.default_rng(seed=42)
     noise_c = rng.choice([-1, 0, 1], size=len(df))
     noise_r = rng.choice([-1, 0, 1], size=len(df))
@@ -237,7 +231,7 @@ def preprocess_df(df_raw: pd.DataFrame) -> pd.DataFrame:
     df['label_range'] = (
         df['label_accuracy'] + noise_r
     ).clip(0, NUM_LABELS - 1).astype(int)
-
+    '''
     return df
 
 
@@ -300,12 +294,12 @@ def build_fixed_eval_sets(csv_path: str, tokenizer, force_rebuild: bool = False)
     df_raw             = pd.read_csv(csv_path)
     df_raw['orig_idx'] = df_raw.index
     df                 = preprocess_df(df_raw)
-    df["agreement_percentage"] = pd.to_numeric(
-        df["agreement_percentage"], errors='coerce'
+    df["agreement_percentage_accuracy"] = pd.to_numeric(
+        df["agreement_percentage_accuracy"], errors='coerce'
     )
 
     print("  Computing max_length from agreement>=60% pool …")
-    df_pool      = df[df["agreement_percentage"] >= 60]
+    df_pool      = df[df["agreement_percentage_accuracy"] >= 60]
     pair_lengths = tokenizer(
         df_pool['text_a'].tolist(),
         df_pool['text_b'].tolist(),
@@ -316,10 +310,10 @@ def build_fixed_eval_sets(csv_path: str, tokenizer, force_rebuild: bool = False)
     print(f"  Pair lengths — median={int(np.median(pair_lengths))}, 95th={p95}")
     print(f"  chosen max_length={max_length}")
 
-    df_100   = df[df["agreement_percentage"] == 100].copy()
+    df_100   = df[df["agreement_percentage_accuracy"] == 100].copy()
     df_60_80 = df[
-        (df["agreement_percentage"] >= 60) &
-        (df["agreement_percentage"] <= 80)
+        (df["agreement_percentage_accuracy"] >= 60) &
+        (df["agreement_percentage_accuracy"] <= 80)
     ].copy()
 
     EVAL_RATIO = 0.15
@@ -389,47 +383,84 @@ def prepare_train_set(
     eval_orig_indices: set,
     agreement_threshold: int,
     experiment_dir: str,
+    threshold_accuracy: int  = None,
+    threshold_coherence: int = None,
+    threshold_range: int     = None,
 ) -> Dataset:
+    
+    def _compute_task_weight(df, agreement_col, label_col):
+        agr = pd.to_numeric(df[agreement_col], errors='coerce').fillna(0.5) / 100.0
+        label_counts = df[label_col].value_counts()
+        total  = len(df)
+        cw_map = {cls: total / (NUM_LABELS * cnt) for cls, cnt in label_counts.items()}
+        sw = agr * df[label_col].map(cw_map)
+        return (sw / sw.mean()).values
+
+    # Si seuils spécifiques non fournis, fallback sur agreement_threshold global
+    thr_acc = threshold_accuracy  if threshold_accuracy  is not None else agreement_threshold
+    thr_coh = threshold_coherence if threshold_coherence is not None else agreement_threshold
+    thr_rng = threshold_range     if threshold_range     is not None else agreement_threshold
+
     df_raw             = pd.read_csv(csv_path)
     df_raw['orig_idx'] = df_raw.index
     df                 = preprocess_df(df_raw)
 
-    df["agreement_percentage"] = pd.to_numeric(
-        df["agreement_percentage"], errors='coerce'
-    )
-    df_thresh = df[df["agreement_percentage"] >= agreement_threshold]
+    df["agreement_percentage_accuracy"]  = pd.to_numeric(df["agreement_percentage_accuracy"],  errors='coerce')
+    df["agreement_percentage_coherence"] = pd.to_numeric(df["agreement_percentage_coherence"], errors='coerce')
+    df["agreement_percentage_range"]     = pd.to_numeric(df["agreement_percentage_range"],     errors='coerce')
+
+    df_thresh = df[
+        (df["agreement_percentage_accuracy"]  >= thr_acc) &
+        (df["agreement_percentage_coherence"] >= thr_coh) &
+        (df["agreement_percentage_range"]     >= thr_rng)
+    ]
     df_train  = df_thresh[~df_thresh['orig_idx'].isin(eval_orig_indices)].copy()
     df_train.reset_index(drop=True, inplace=True)
 
     if len(df_train) == 0:
-        raise ValueError(f"Train set is empty for threshold={agreement_threshold}%.")
+        raise ValueError(
+            f"Train set is empty for thresholds: "
+            f"accuracy>={thr_acc}%, coherence>={thr_coh}%, range>={thr_rng}%."
+        )
 
-    # Sample weights based on accuracy label (real labels)
-    df_train["agreement_weight"] = df_train["agreement_percentage"] / 100.0
-    label_counts = df_train["label_accuracy"].value_counts()
-    total        = len(df_train)
-    cw_map       = {
-        cls: total / (NUM_LABELS * cnt)
-        for cls, cnt in label_counts.items()
-    }
-    df_train["class_weight"]   = df_train["label_accuracy"].map(cw_map)
-    df_train["sample_weight"]  = (
-        df_train["agreement_weight"] * df_train["class_weight"]
+    # ── Sample weights indépendants par tâche ─────────────────────────────
+    df_train["sample_weight_accuracy"]  = _compute_task_weight(
+        df_train, "agreement_percentage_accuracy",  "label_accuracy"
     )
-    df_train["sample_weight"] /= df_train["sample_weight"].mean()
+    df_train["sample_weight_coherence"] = _compute_task_weight(
+        df_train, "agreement_percentage_coherence", "label_coherence"
+    )
+    df_train["sample_weight_range"]     = _compute_task_weight(
+        df_train, "agreement_percentage_range",     "label_range"
+    )
 
-    print(f"\n[Train | agreement>={agreement_threshold}%]  n_samples={len(df_train)}")
+    print(f"\n[Train | accuracy>={thr_acc}% | coherence>={thr_coh}% | range>={thr_rng}%]"
+          f"  n_samples={len(df_train)}")
     print("Label accuracy distribution:")
     print(df_train['label_accuracy'].value_counts().sort_index())
+    print("Label coherence distribution:")
+    print(df_train['label_coherence'].value_counts().sort_index())
+    print("Label range distribution:")
+    print(df_train['label_range'].value_counts().sort_index())
+
+    print("\nSample weights stats:")
+    for task in TASK_NAMES:
+        col = f"sample_weight_{task}"
+        print(f"  {task:>10} — mean={df_train[col].mean():.3f}  "
+              f"min={df_train[col].min():.3f}  "
+              f"max={df_train[col].max():.3f}")
 
     ds = _cast_labels(
         Dataset.from_pandas(
             df_train[["orig_idx", "text_a", "text_b", "task_id", "ef_level",
                        "label_accuracy", "label_coherence", "label_range",
-                       "sample_weight"]],
+                       "sample_weight_accuracy",
+                       "sample_weight_coherence",
+                       "sample_weight_range"]],
             preserve_index=False,
         )
     )
+
     os.makedirs(experiment_dir, exist_ok=True)
     save_split_to_jsonl(ds, os.path.join(experiment_dir, "train.jsonl"))
     return ds
@@ -547,8 +578,8 @@ def train_model(tokenized_train, tokenized_test, num_labels, output_dir, tokeniz
         eval_dataset=tokenized_test,
         compute_metrics=compute_metrics,
         data_collator=MultiTaskDataCollator(),
-        sigma=1.0,
-        task_weights=[1.0, 1.0, 1.0],   # equal weight — adjust when real data arrives
+        sigma=[0.8, 1.5, 1.2],          # acc=strict, coh=souple, range=moyen
+        task_weights=[1.0, 1.5, 1.5],   # booster coh et range
     )
 
     trainer.train()
@@ -704,7 +735,13 @@ def main():
         print('='*80)
 
         train_ds = prepare_train_set(
-            CSV_PATH, eval_orig_indices, threshold, exp_data_dir
+            CSV_PATH,
+            eval_orig_indices,
+            agreement_threshold  = AGREEMENT_THRESHOLD,  # fallback global
+            experiment_dir       = exp_data_dir,
+            threshold_accuracy   = 60,
+            threshold_coherence  = 50,
+            threshold_range      = 50,
         )
 
         print("Tokenizing train set …")
