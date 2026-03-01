@@ -962,7 +962,7 @@ def main():
     AGREEMENT_THRESHOLD = 60
 
     experiments = [
-        {"name": "multitask_cross_encoder_v2"},
+        {"name": "multitask_cross_encoder_v3"},
     ]
 
     ##cdcd
