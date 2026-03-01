@@ -336,6 +336,7 @@ class MultiTaskOrdinalTrainer(Trainer):
 def preprocess_df(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = df_raw.copy()
     df = df.rename(columns={"correction_accuracy": "correction"})
+
     df['ef_level'] = df.apply(
         lambda row: median_map[row['cefr_level']]
         if pd.isna(row['ef_level']) else row['ef_level'],
@@ -439,6 +440,7 @@ def build_fixed_eval_sets(
     print("Building fixed eval sets …")
     df_raw             = pd.read_csv(csv_path)
     df_raw = df_raw.rename(columns={"correction_accuracy": "correction"})
+    df_raw = df_raw[df_raw['student_submission'].notna() & (df_raw['student_submission'].astype(str).str.strip() != '')]
     df_raw['orig_idx'] = df_raw.index
     df                 = preprocess_df(df_raw)
 
@@ -951,8 +953,8 @@ def main():
         tokenizer,
         force_rebuild=True,
         eval_threshold_accuracy=60,
-        eval_threshold_coherence=50,
-        eval_threshold_range=50,
+        eval_threshold_coherence=60,
+        eval_threshold_range=60,
     )
 
     print(f"\nTokenizing fixed eval sets (max_length={max_length}) …")

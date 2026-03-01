@@ -1,2 +1,2 @@
 experiment,accuracy_accuracy,accuracy_qwk,accuracy_lwk,accuracy_pearson,accuracy_adjacent_acc,accuracy_mae,coherence_accuracy,coherence_qwk,coherence_lwk,coherence_pearson,coherence_adjacent_acc,coherence_mae,range_accuracy,range_qwk,range_lwk,range_pearson,range_adjacent_acc,range_mae
-multitask_cross_encoder_v2,0.801,0.9501,0.882,0.9505,0.9876,0.225,0.8776,0.9726,0.9238,0.973,0.9975,0.1261,0.7194,0.7736,0.7417,0.7745,0.9085,0.534
+multitask_cross_encoder_v4,0.6995,0.9005,0.796,0.9028,0.992,0.3165,0.7979,0.8998,0.8194,0.9005,0.9973,0.2074,0.6782,0.8948,0.7696,0.896,0.992,0.3298
