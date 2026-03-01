@@ -29,7 +29,8 @@ import boto3
 region_name    = 'us-east-1'
 profile_name   = 'lsd-sandbox'
 bucket_name    = 'sagemaker-studio-oxs6vznjds'
-CSV_PATH       = "data_v2/merged_accuracy_coherence_range_final.csv"
+#CSV_PATH       = "data_v2/merged_accuracy_coherence_range_final.csv"
+CSV_PATH = "s3://sagemaker-studio-oxs6vznjds/writing_gec/data/merged_accuracy_coherence_range_final.csv"
 FIXED_EVAL_DIR = "data_v2/fixed_eval"
 NUM_LABELS     = 6
 TASK_NAMES     = ["accuracy", "coherence", "range"]
@@ -334,6 +335,7 @@ class MultiTaskOrdinalTrainer(Trainer):
 # ============================================================
 def preprocess_df(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = df_raw.copy()
+    df = df.rename(columns={"correction_accuracy": "correction"})
     df['ef_level'] = df.apply(
         lambda row: median_map[row['cefr_level']]
         if pd.isna(row['ef_level']) else row['ef_level'],
@@ -436,6 +438,7 @@ def build_fixed_eval_sets(
 
     print("Building fixed eval sets …")
     df_raw             = pd.read_csv(csv_path)
+    df_raw = df_raw.rename(columns={"correction_accuracy": "correction"})
     df_raw['orig_idx'] = df_raw.index
     df                 = preprocess_df(df_raw)
 
@@ -982,8 +985,8 @@ def main():
             agreement_threshold=AGREEMENT_THRESHOLD,
             experiment_dir=exp_data_dir,
             threshold_accuracy=60,
-            threshold_coherence=50,
-            threshold_range=50,
+            threshold_coherence=60,
+            threshold_range=60,
         )
 
         print("Tokenizing train set …")
