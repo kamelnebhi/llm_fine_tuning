@@ -27,6 +27,9 @@ slm/gec_fine_tuning/wandb/*
 slm/gec_fine_tuning/m2score/*
 *.db
 slm/writing_task_class_ai_acc/onnx_model/*
+slm/ai_convos_v2/model_saved/*
+slm/ai_convos_v2/data/*
+
 
 
 
