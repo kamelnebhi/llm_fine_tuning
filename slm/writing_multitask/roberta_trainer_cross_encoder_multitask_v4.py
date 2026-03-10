@@ -1,3 +1,4 @@
+# pip install "sagemaker>=2.140.0" "transformers==4.26.1" "datasets[s3]==2.10.1" evaluate==0.4 --upgrade
 import os
 os.environ["WANDB_DISABLED"] = "true"
 

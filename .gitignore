@@ -29,6 +29,9 @@ slm/gec_fine_tuning/m2score/*
 slm/writing_task_class_ai_acc/onnx_model/*
 slm/ai_convos_v2/model_saved/*
 slm/ai_convos_v2/data/*
+slm/writing_multitask/onnx_model/*
+slm/writing_multitask/model_saved/*
+
 
 
 

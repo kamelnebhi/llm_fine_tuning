@@ -1,15 +1,14 @@
 """
 evaluate_onnx.py
 ----------------
-Evalue les modèles ONNX (original + quantifié) sur les mêmes
-données de validation/test utilisées pendant l'entraînement.
+Évalue le modèle ONNX multitask dual-input sur validation/test.
 
 Usage:
     python evaluate_onnx.py \
         --onnx_path      onnx_model/multitask_roberta.onnx \
-        --quantized_path onnx_model/multitask_roberta_quantized.onnx \
         --eval_dir       data_v2/fixed_eval \
-        --max_length     512 \
+        --max_length_acc     512 \
+        --max_length_coh_rng 256 \
         --batch_size     16 \
         --output_dir     results/onnx_eval
 """
@@ -21,11 +20,6 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-import onnx
-if not hasattr(onnx, 'mapping'):
-    import onnx._mapping as _m
-    onnx.mapping = _m
-
 import onnxruntime as ort
 from transformers import AutoTokenizer
 from sklearn.metrics import (
@@ -36,12 +30,10 @@ from sklearn.metrics import (
     confusion_matrix,
 )
 from scipy.stats import pearsonr
-from datasets import Dataset
-import torch
 
-# ── constants (doivent correspondre à l'entraînement) ─────────────────────────
-NUM_LABELS = 6
-TASK_NAMES = ["accuracy", "coherence", "range"]
+# ── constants ──────────────────────────────────────────────────────────────────
+NUM_LABELS  = 6
+TASK_NAMES  = ["accuracy", "coherence", "range"]
 LABEL_NAMES = [f"Score {i}" for i in range(NUM_LABELS)]
 
 
@@ -72,22 +64,23 @@ def build_session(onnx_path: str) -> ort.InferenceSession:
     )
     opts = ort.SessionOptions()
     opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    return ort.InferenceSession(onnx_path, sess_options=opts, providers=providers)
+    session = ort.InferenceSession(onnx_path, sess_options=opts, providers=providers)
+    print(f"    Providers : {session.get_providers()}")
+    return session
 
 
 # ============================================================
-# BATCH INFERENCE
+# BATCH INFERENCE — dual input
 # ============================================================
 def run_inference(
     session: ort.InferenceSession,
     tokenizer,
     records: list,
-    max_length: int,
+    max_length_acc: int,
+    max_length_coh_rng: int,
     batch_size: int,
 ) -> np.ndarray:
-    """
-    Returns logits array of shape [n_samples, 18].
-    """
+    """Returns logits array [n_samples, 18]."""
     all_logits = []
 
     for start in tqdm(range(0, len(records), batch_size), desc="Inference"):
@@ -96,37 +89,48 @@ def run_inference(
         text_a = [r["text_a"] for r in batch]
         text_b = [r["text_b"] for r in batch]
 
-        enc = tokenizer(
+        # Pass 1: accuracy (text_a + text_b pair)
+        enc_acc = tokenizer(
             text_a,
             text_b,
             truncation=True,
             padding="max_length",
-            max_length=max_length,
+            max_length=max_length_acc,
+            return_tensors="np",
+        )
+
+        # Pass 2: coherence/range (text_a only)
+        enc_coh_rng = tokenizer(
+            text_a,
+            truncation=True,
+            padding="max_length",
+            max_length=max_length_coh_rng,
             return_tensors="np",
         )
 
         ort_inputs = {
-            "input_ids":      enc["input_ids"].astype(np.int64),
-            "attention_mask": enc["attention_mask"].astype(np.int64),
+            "input_ids_acc":          enc_acc["input_ids"].astype(np.int64),
+            "attention_mask_acc":     enc_acc["attention_mask"].astype(np.int64),
+            "input_ids_coh_rng":      enc_coh_rng["input_ids"].astype(np.int64),
+            "attention_mask_coh_rng": enc_coh_rng["attention_mask"].astype(np.int64),
         }
 
         logits = session.run(["logits"], ort_inputs)[0]  # [batch, 18]
         all_logits.append(logits)
 
-    return np.concatenate(all_logits, axis=0)  # [n, 18]
+    return np.concatenate(all_logits, axis=0)
 
 
 # ============================================================
 # METRICS
 # ============================================================
 def compute_task_metrics(true_labels: np.ndarray, pred_labels: np.ndarray) -> dict:
-    metrics = {}
-
     if len(set(true_labels)) <= 1 or len(set(pred_labels)) <= 1:
         return {k: float("nan") for k in
                 ["accuracy", "qwk", "lwk", "pearson",
                  "adjacent_acc", "mae", "precision", "recall", "f1"]}
 
+    metrics = {}
     metrics["accuracy"]     = round(accuracy_score(true_labels, pred_labels), 4)
     metrics["qwk"]          = round(cohen_kappa_score(true_labels, pred_labels, weights="quadratic"), 4)
     metrics["lwk"]          = round(cohen_kappa_score(true_labels, pred_labels, weights="linear"), 4)
@@ -134,7 +138,7 @@ def compute_task_metrics(true_labels: np.ndarray, pred_labels: np.ndarray) -> di
     metrics["adjacent_acc"] = round(
         (np.abs(pred_labels.astype(int) - true_labels.astype(int)) <= 1).mean(), 4
     )
-    metrics["mae"]          = round(
+    metrics["mae"] = round(
         np.abs(pred_labels.astype(int) - true_labels.astype(int)).mean(), 4
     )
 
@@ -149,13 +153,14 @@ def compute_task_metrics(true_labels: np.ndarray, pred_labels: np.ndarray) -> di
 
 
 # ============================================================
-# FULL EVALUATION — un modèle, un split
+# FULL EVALUATION
 # ============================================================
 def evaluate_model(
     session: ort.InferenceSession,
     tokenizer,
     records: list,
-    max_length: int,
+    max_length_acc: int,
+    max_length_coh_rng: int,
     batch_size: int,
     model_label: str,
     split_name: str,
@@ -164,29 +169,30 @@ def evaluate_model(
 
     print(f"\n{'='*70}")
     print(f"  Model : {model_label}   |   Split : {split_name.upper()}")
+    print(f"  max_length_acc={max_length_acc}  max_length_coh_rng={max_length_coh_rng}")
     print(f"{'='*70}")
 
-    # ── Inférence ──────────────────────────────────────────────────────────
-    logits = run_inference(session, tokenizer, records, max_length, batch_size)
-    # logits : [n, 18]
+    logits = run_inference(
+        session, tokenizer, records,
+        max_length_acc, max_length_coh_rng, batch_size,
+    )
 
-    # ── Récupérer les labels vrais ─────────────────────────────────────────
     true_accuracy  = np.array([r["label_accuracy"]  for r in records])
     true_coherence = np.array([r["label_coherence"] for r in records])
     true_range     = np.array([r["label_range"]     for r in records])
     true_labels    = np.stack([true_accuracy, true_coherence, true_range], axis=1)
-    # true_labels : [n, 3]
 
     summary = {"model": model_label, "split": split_name}
     rows    = []
 
+    qwk_scores = []
+
     for i, task in enumerate(TASK_NAMES):
         task_logits = logits[:, i * NUM_LABELS : (i + 1) * NUM_LABELS]
-        probs       = softmax(task_logits)                  # [n, 6]
-        preds       = np.argmax(probs, axis=-1)             # [n]
-        trues       = true_labels[:, i]                     # [n]
+        probs       = softmax(task_logits)
+        preds       = np.argmax(probs, axis=-1)
+        trues       = true_labels[:, i]
 
-        # ── métriques ──────────────────────────────────────────────────────
         m = compute_task_metrics(trues, preds)
 
         print(f"\n  {'─'*60}")
@@ -205,11 +211,13 @@ def evaluate_model(
         for k, v in m.items():
             summary[f"{task}_{k}"] = v
 
-        # ── confusion matrix ───────────────────────────────────────────────
-        cm      = confusion_matrix(trues, preds, labels=list(range(NUM_LABELS)))
-        cm_df   = pd.DataFrame(cm, index=LABEL_NAMES, columns=LABEL_NAMES)
-        cm_norm = cm.astype(float) / cm.sum(axis=1, keepdims=True)
-        cm_norm = np.nan_to_num(cm_norm)
+        if not np.isnan(m["qwk"]):
+            qwk_scores.append(m["qwk"])
+
+        # Confusion matrices
+        cm    = confusion_matrix(trues, preds, labels=list(range(NUM_LABELS)))
+        cm_df = pd.DataFrame(cm, index=LABEL_NAMES, columns=LABEL_NAMES)
+        cm_norm = cm.astype(float) / np.maximum(cm.sum(axis=1, keepdims=True), 1)
 
         tag = f"{model_label.replace(' ', '_')}_{split_name}_{task}"
         cm_df.to_csv(os.path.join(output_dir, f"cm_{tag}.csv"))
@@ -217,22 +225,30 @@ def evaluate_model(
             np.round(cm_norm, 3), index=LABEL_NAMES, columns=LABEL_NAMES
         ).to_csv(os.path.join(output_dir, f"cm_norm_{tag}.csv"))
 
-        # ── per-sample rows ────────────────────────────────────────────────
+        # Per-sample rows
         for idx in range(len(records)):
             rows.append({
-                "idx":           idx,
-                "task_id":       records[idx].get("task_id", ""),
-                "ef_level":      records[idx].get("ef_level", ""),
-                "task":          task,
-                "true":          int(trues[idx]),
-                "predicted":     int(preds[idx]),
-                "confidence":    round(float(probs[idx].max()), 4),
-                "abs_error":     int(abs(int(preds[idx]) - int(trues[idx]))),
-                "model":         model_label,
-                "split":         split_name,
+                "idx":        idx,
+                "task_id":    records[idx].get("task_id", ""),
+                "ef_level":   records[idx].get("ef_level", ""),
+                "task":       task,
+                "true":       int(trues[idx]),
+                "predicted":  int(preds[idx]),
+                "confidence": round(float(probs[idx].max()), 4),
+                "abs_error":  int(abs(int(preds[idx]) - int(trues[idx]))),
+                "model":      model_label,
+                "split":      split_name,
             })
 
-    # ── Sauvegarder les prédictions ────────────────────────────────────────
+    # Composite QWK (harmonic mean)
+    if qwk_scores and all(q > 0 for q in qwk_scores):
+        composite = len(qwk_scores) / sum(1.0 / max(q, 0.01) for q in qwk_scores)
+    else:
+        composite = np.mean(qwk_scores) if qwk_scores else float("nan")
+    summary["composite_qwk"] = round(composite, 4)
+    print(f"\n  Composite QWK (harmonic) : {summary['composite_qwk']}")
+
+    # Save predictions
     pred_df = pd.DataFrame(rows)
     tag     = f"{model_label.replace(' ', '_')}_{split_name}"
     pred_df.to_csv(os.path.join(output_dir, f"predictions_{tag}.csv"), index=False)
@@ -241,13 +257,13 @@ def evaluate_model(
 
 
 # ============================================================
-# COMPARAISON ONNX vs QUANTIZED
+# COMPARISON TABLE
 # ============================================================
 def compare_models(summaries: list, output_dir: str):
     df = pd.DataFrame(summaries)
 
     print("\n" + "=" * 70)
-    print("COMPARAISON  ONNX FP32  vs  ONNX Int8 Quantifié")
+    print("RESULTS SUMMARY")
     print("=" * 70)
 
     metrics_to_show = ["accuracy", "qwk", "pearson", "adjacent_acc", "mae"]
@@ -258,16 +274,24 @@ def compare_models(summaries: list, output_dir: str):
 
         for task in TASK_NAMES:
             print(f"\n    [{task}]")
-            header = f"    {'Metric':<16}" + "".join(f"{m:<12}" for m in sub.index)
+            header = f"    {'Metric':<16}" + "".join(f"{m:<14}" for m in sub.index)
             print(header)
             for metric in metrics_to_show:
                 col  = f"{task}_{metric}"
                 vals = [str(sub.loc[m, col]) if col in sub.columns else "N/A"
                         for m in sub.index]
-                print(f"    {metric:<16}" + "".join(f"{v:<12}" for v in vals))
+                print(f"    {metric:<16}" + "".join(f"{v:<14}" for v in vals))
+
+        # Composite QWK
+        print(f"\n    [composite]")
+        header = f"    {'Metric':<16}" + "".join(f"{m:<14}" for m in sub.index)
+        print(header)
+        vals = [str(sub.loc[m, "composite_qwk"]) if "composite_qwk" in sub.columns else "N/A"
+                for m in sub.index]
+        print(f"    {'composite_qwk':<16}" + "".join(f"{v:<14}" for v in vals))
 
     df.to_csv(os.path.join(output_dir, "onnx_eval_summary.csv"), index=False)
-    print(f"\n  Résultats sauvegardés → {output_dir}/onnx_eval_summary.csv")
+    print(f"\n  Saved → {output_dir}/onnx_eval_summary.csv")
 
 
 # ============================================================
@@ -275,15 +299,15 @@ def compare_models(summaries: list, output_dir: str):
 # ============================================================
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--onnx_path",      default="onnx_model/multitask_roberta.onnx")
-    p.add_argument("--quantized_path", default="onnx_model/multitask_roberta_quantized.onnx")
-    p.add_argument("--eval_dir",       default="data_v2/fixed_eval",
-                   help="Dossier contenant validation.jsonl, test.jsonl et eval_meta.json")
-    p.add_argument("--max_length",     type=int, default=None,
-                   help="Si None, lu depuis eval_meta.json")
-    p.add_argument("--batch_size",     type=int, default=16)
-    p.add_argument("--output_dir",     default="results/onnx_eval")
-    p.add_argument("--tokenizer",      default="FacebookAI/roberta-large")
+    p.add_argument("--onnx_path",          default="onnx_model/multitask_roberta.onnx")
+    p.add_argument("--quantized_path",     default=None,
+                   help="Path to quantized ONNX (optional, skip if not provided)")
+    p.add_argument("--eval_dir",           default="data_v2/fixed_eval")
+    p.add_argument("--max_length_acc",     type=int, default=512)
+    p.add_argument("--max_length_coh_rng", type=int, default=256)
+    p.add_argument("--batch_size",         type=int, default=16)
+    p.add_argument("--output_dir",         default="results/onnx_eval")
+    p.add_argument("--tokenizer",          default="FacebookAI/roberta-large")
     return p.parse_args()
 
 
@@ -291,66 +315,51 @@ def main():
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # ── Lire max_length depuis eval_meta.json si non fourni ───────────────
-    meta_path = os.path.join(args.eval_dir, "eval_meta.json")
-    if args.max_length is None:
-        with open(meta_path) as f:
-            meta = json.load(f)
-        max_length = meta["max_length"]
-        print(f"max_length lu depuis eval_meta.json : {max_length}")
-    else:
-        max_length = args.max_length
-
-    # ── Tokenizer ─────────────────────────────────────────────────────────
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
 
-    # ── Charger les splits ────────────────────────────────────────────────
+    # Load eval splits
     val_records  = load_jsonl(os.path.join(args.eval_dir, "validation.jsonl"))
     test_records = load_jsonl(os.path.join(args.eval_dir, "test.jsonl"))
     print(f"Validation : {len(val_records)} samples")
     print(f"Test       : {len(test_records)} samples")
 
-    # ── Modèles à évaluer ─────────────────────────────────────────────────
+    # Models to evaluate
     models_to_eval = []
-
     if os.path.exists(args.onnx_path):
-        models_to_eval.append(("ONNX FP32",   args.onnx_path))
+        models_to_eval.append(("ONNX FP32", args.onnx_path))
     else:
-        print(f"[!] ONNX FP32 introuvable : {args.onnx_path}")
+        print(f"[!] Not found: {args.onnx_path}")
 
-    if os.path.exists(args.quantized_path):
-        models_to_eval.append(("ONNX Int8",   args.quantized_path))
-    else:
-        print(f"[!] ONNX quantifié introuvable : {args.quantized_path}")
+    if args.quantized_path and os.path.exists(args.quantized_path):
+        models_to_eval.append(("ONNX Int8", args.quantized_path))
 
     if not models_to_eval:
-        raise FileNotFoundError("Aucun modèle ONNX trouvé.")
+        raise FileNotFoundError("No ONNX model found.")
 
-    # ── Évaluation ────────────────────────────────────────────────────────
+    # Evaluate
     all_summaries = []
 
     for model_label, model_path in models_to_eval:
-        print(f"\nChargement session : {model_label}  ({model_path})")
+        print(f"\nLoading : {model_label}  ({model_path})")
         session = build_session(model_path)
 
         for split_name, records in [("validation", val_records),
                                      ("test",       test_records)]:
             summary = evaluate_model(
-                session     = session,
-                tokenizer   = tokenizer,
-                records     = records,
-                max_length  = max_length,
-                batch_size  = args.batch_size,
-                model_label = model_label,
-                split_name  = split_name,
-                output_dir  = args.output_dir,
+                session=session,
+                tokenizer=tokenizer,
+                records=records,
+                max_length_acc=args.max_length_acc,
+                max_length_coh_rng=args.max_length_coh_rng,
+                batch_size=args.batch_size,
+                model_label=model_label,
+                split_name=split_name,
+                output_dir=args.output_dir,
             )
             all_summaries.append(summary)
 
-    # ── Comparaison finale ────────────────────────────────────────────────
     compare_models(all_summaries, args.output_dir)
 
-    # ── Sauvegarder aussi en JSON ─────────────────────────────────────────
     with open(os.path.join(args.output_dir, "onnx_eval_summary.json"), "w") as f:
         json.dump(all_summaries, f, indent=2)
 
